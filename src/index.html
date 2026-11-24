@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'" />
+  <title>AUBM PCheck — Fiches Todo PC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">PC</div>
+        <div>
+          <p class="brand-name">AUBM PCheck</p>
+          <p class="brand-tag">Fiches Todo PC</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button type="button" class="nav-btn active" data-view="editor">
+          Nouvelle fiche
+        </button>
+        <button type="button" class="nav-btn" data-view="drafts">
+          Brouillons
+          <span class="badge" id="drafts-count">0</span>
+        </button>
+        <button type="button" class="nav-btn" data-view="history">
+          Historique
+          <span class="badge" id="history-count">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <p>Préparez, cochez, finalisez.<br />Exportez en PDF ou imprimez.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- Éditeur -->
+      <section id="view-editor" class="view active">
+        <header class="view-header">
+          <div>
+            <h1 id="editor-title">Nouvelle fiche Todo PC</h1>
+            <p class="view-sub">Renseignez le PC, ajoutez les tâches, puis cochez-les au fur et à mesure.</p>
+          </div>
+          <div class="header-actions">
+            <button type="button" class="btn ghost" id="btn-new">Nouvelle</button>
+            <button type="button" class="btn ghost" id="btn-save-draft">Enregistrer brouillon</button>
+            <button type="button" class="btn secondary" id="btn-print">Imprimer</button>
+            <button type="button" class="btn secondary" id="btn-export-pdf">Exporter PDF</button>
+            <button type="button" class="btn primary" id="btn-finalize">Finaliser</button>
+          </div>
+        </header>
+
+        <form id="fiche-form" class="fiche-form" autocomplete="off">
+          <div class="meta-grid">
+            <label class="field">
+              <span>Version du Todo PC</span>
+              <input type="text" id="field-version" name="version" placeholder="ex. v2.1" required />
+            </label>
+            <label class="field">
+              <span>Propriétaire du PC</span>
+              <input type="text" id="field-owner" name="owner" placeholder="Nom du propriétaire" required />
+            </label>
+            <label class="field">
+              <span>Nom complet du PC</span>
+              <input type="text" id="field-pc-name" name="pcName" placeholder="ex. LAPTOP-DUPONT-01" required />
+            </label>
+            <label class="field">
+              <span>Date de début de préparation</span>
+              <input type="date" id="field-start-date" name="startDate" required />
+            </label>
+          </div>
+
+          <div class="tasks-panel">
+            <div class="tasks-header">
+              <h2>Tâches à faire</h2>
+              <p class="hint"><span id="tasks-progress">0 / 0</span> cochées</p>
+            </div>
+
+            <div class="add-task-row">
+              <input type="text" id="new-task-input" placeholder="Saisir une tâche à ajouter…" />
+              <button type="button" class="btn primary" id="btn-add-task">Ajouter</button>
+            </div>
+
+            <ul id="tasks-list" class="tasks-list" aria-live="polite"></ul>
+            <p id="tasks-empty" class="empty-state">Aucune tâche pour l’instant. Ajoutez la première ci-dessus.</p>
+          </div>
+        </form>
+      </section>
+
+      <!-- Brouillons -->
+      <section id="view-drafts" class="view">
+        <header class="view-header">
+          <div>
+            <h1>Brouillons</h1>
+            <p class="view-sub">Fiches en cours de préparation, non encore finalisées.</p>
+          </div>
+        </header>
+        <div id="drafts-list" class="records-list"></div>
+        <p id="drafts-empty" class="empty-state hidden">Aucun brouillon enregistré.</p>
+      </section>
+
+      <!-- Historique -->
+      <section id="view-history" class="view">
+        <header class="view-header">
+          <div>
+            <h1>Historique des Todo PC</h1>
+            <p class="view-sub">Fiches finalisées avec date de fin de préparation.</p>
+          </div>
+          <div class="header-actions">
+            <input type="search" id="history-search" class="search" placeholder="Rechercher (PC, propriétaire, version)…" />
+          </div>
+        </header>
+        <div id="history-list" class="records-list"></div>
+        <p id="history-empty" class="empty-state hidden">Aucune fiche finalisée pour le moment.</p>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal finalisation -->
+  <div id="modal-finalize" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="finalize-title">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel">
+      <h2 id="finalize-title">Finaliser la fiche</h2>
+      <p>Indiquez la date de fin de préparation. La fiche passera dans l’historique.</p>
+      <label class="field">
+        <span>Date de fin de préparation</span>
+        <input type="date" id="field-end-date" />
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close-modal>Annuler</button>
+        <button type="button" class="btn primary" id="btn-confirm-finalize">Confirmer la finalisation</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
