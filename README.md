@@ -51,9 +51,9 @@ dotnet publish AubmPCheck\AubmPCheck.csproj -c Release -r win-x64 --self-contain
 
 ## Données
 
-Stockage local JSON :
+Stockage local **SQLite** (tables `fiches` + `tasks`, sans JSON) :
 
-`%AppData%\AubmPCheck\data\todos.json`
+`%AppData%\AubmPCheck\data\todos.db`
 
 ## Structure
 
@@ -61,7 +61,7 @@ Stockage local JSON :
 AubmPCheck.sln
 AubmPCheck/
   Models/          # Fiches, tâches, store
-  Services/        # JSON, PDF, impression
+  Services/        # SQLite, PDF, impression
   ViewModels/      # MVVM (CommunityToolkit)
   Themes/          # Styles WPF
   MainWindow.xaml  # Interface
