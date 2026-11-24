@@ -56,6 +56,10 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+# Fix Windows build: image 4.11 needs archive with ZLibDecoder.decodeLazy
+dependency_overrides:
+  archive: 4.7.1
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
