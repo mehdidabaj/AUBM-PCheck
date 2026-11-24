@@ -7,7 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <ApplicationIcon></ApplicationIcon>
     <AssemblyName>AubmPCheck</AssemblyName>
     <RootNamespace>AubmPCheck</RootNamespace>
     <Product>AUBM PCheck</Product>
@@ -16,9 +15,16 @@
     <Description>Fiches de préparation PC avec checklist, historique, export PDF et impression</Description>
   </PropertyGroup>
 
+  <!-- Reliable publish: keep native SQLite / Skia DLLs beside the exe -->
+  <PropertyGroup Condition="'$(PublishProtocol)' != '' Or '$(DeployOnBuild)' == 'true' Or '$(PublishDir)' != '' Or $(PublishSingleFile) == true Or $(SelfContained) == true">
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.10" />
     <PackageReference Include="QuestPDF" Version="2024.10.3" />
   </ItemGroup>
 
