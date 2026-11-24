@@ -59,8 +59,9 @@ public partial class App : Application
             var logPath = Path.Combine(logDir, $"error-{DateTime.Now:yyyyMMdd-HHmmss}.log");
             File.WriteAllText(logPath, BuildErrorText(title, ex), Encoding.UTF8);
 
+            var root = GetRootMessage(ex);
             MessageBox.Show(
-                $"{ex.Message}\n\nDétails enregistrés dans :\n{logPath}",
+                $"{root}\n\nDétails enregistrés dans :\n{logPath}",
                 $"AUBM PCheck — {title}",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -69,6 +70,17 @@ public partial class App : Application
         {
             MessageBox.Show(ex.ToString(), $"AUBM PCheck — {title}", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private static string GetRootMessage(Exception ex)
+    {
+        var current = ex;
+        while (current.InnerException != null)
+        {
+            current = current.InnerException;
+        }
+
+        return string.IsNullOrWhiteSpace(current.Message) ? ex.Message : current.Message;
     }
 
     private static string BuildErrorText(string title, Exception ex)

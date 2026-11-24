@@ -290,8 +290,7 @@
                               <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <CheckBox IsChecked="{Binding Done}"
-                                      VerticalAlignment="Center"
-                                      Margin="0,0,4,0"
+                                      Style="{StaticResource TaskCheckBox}"
                                       IsEnabled="{Binding DataContext.IsReadOnly, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource InvertBool}}" />
                             <TextBlock Grid.Column="1" Text="{Binding Text}" Style="{StaticResource DoneTextStyle}"
                                        VerticalAlignment="Center" Margin="4,0,12,0" />
@@ -499,9 +498,6 @@
               BorderThickness="1"
               CornerRadius="16"
               Padding="28">
-        <Border.Effect>
-          <DropShadowEffect BlurRadius="30" ShadowDepth="8" Opacity="0.25" Color="#102033" />
-        </Border.Effect>
         <StackPanel>
           <TextBlock Text="Finaliser la fiche" FontSize="22" FontWeight="Bold" Foreground="{StaticResource TextBrush}" />
           <TextBlock Text="Indiquez la date de fin de préparation. La fiche passera dans l’historique."
