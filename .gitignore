@@ -1,0 +1,20 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.nupkg
+publish/
+artifacts/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Node leftovers
+node_modules/
+dist/
+package-lock.json
