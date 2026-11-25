@@ -5,10 +5,8 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000",
-    "lint": "eslint",
-    "deploy:win": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-windows.ps1",
-    "start:win": "powershell -ExecutionPolicy Bypass -File ./scripts/start-windows.ps1"
+    "start": "next start",
+    "lint": "eslint"
   },
   "dependencies": {
     "better-sqlite3": "^13.2.0",
