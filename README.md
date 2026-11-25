@@ -19,12 +19,13 @@ Au premier démarrage, un admin est créé via `ADMIN_USERNAME` / `ADMIN_PASSWOR
 ## Sécurité (corrigée / recommandée)
 
 - Auth obligatoire sur l’API (sauf `/api/health`)
-- Mots de passe hashés (bcrypt)
-- Sessions serveur en MySQL + cookie httpOnly / SameSite
-- Rate-limit login + API
-- En-têtes Helmet / CSP
-- Requêtes SQL paramétrées
-- **Recommandé** : reverse proxy HTTPS (nginx) puis `COOKIE_SECURE=true`
+- Mots de passe **applicatifs** hashés (bcrypt) en MySQL — jamais stockés en clair en base
+- `ADMIN_PASSWORD` dans `.env` = **bootstrap one-shot** seulement ; retiré après 1er démarrage
+- Fichier temporaire `ADMIN_BOOTSTRAP_ONCE.txt` (chmod 600) puis à supprimer
+- `.env` en `chmod 600` (contient encore le secret MySQL de connexion, normal)
+- Sessions serveur + cookie httpOnly / SameSite
+- Rate-limit login + API, Helmet/CSP, SQL paramétré
+- **Recommandé** : HTTPS (nginx) + `COOKIE_SECURE=true`
 
 ## Déploiement Debian
 

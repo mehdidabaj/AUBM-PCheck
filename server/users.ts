@@ -29,13 +29,20 @@ function normalizeRole(role: string | undefined): AppRole {
   return role === "admin" ? "admin" : "reader";
 }
 
-export async function ensureBootstrapAdmin() {
+export async function ensureBootstrapAdmin(): Promise<{
+  created: boolean;
+  username?: string;
+}> {
   const pool = getPool();
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT COUNT(*) AS c FROM users`,
   );
   const count = Number((rows[0] as { c: number }).c || 0);
-  if (count > 0) return;
+  if (count > 0) {
+    // Le mot de passe en clair dans l'env ne sert plus après le bootstrap
+    delete process.env.ADMIN_PASSWORD;
+    return { created: false };
+  }
 
   const username = (process.env.ADMIN_USERNAME || "admin").trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || "AdminChangeMe!2026";
@@ -48,9 +55,14 @@ export async function ensureBootstrapAdmin() {
      VALUES (?, ?, ?, ?, 'admin', ?, ?)`,
     [randomUUID(), username, displayName, hash, now, now],
   );
+
+  // Ne pas garder le secret en clair dans le process Node
+  delete process.env.ADMIN_PASSWORD;
+
   console.log(
-    `Compte admin initial créé : ${username} (changez le mot de passe dès que possible)`,
+    `Compte admin initial créé : ${username} (mot de passe hashé en MySQL — retirez ADMIN_PASSWORD du .env)`,
   );
+  return { created: true, username };
 }
 
 export async function authenticate(
