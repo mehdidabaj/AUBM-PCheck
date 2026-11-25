@@ -1,7 +1,7 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
-import { getDb } from "./db.js";
+import { getMysqlConfig, initDb } from "./db.js";
 import { deleteFiche, getFiche, listFiches, upsertFiche } from "./fiches.js";
 import { findProjectRoot } from "./paths.js";
 import type { FicheInput, FicheStatus } from "../shared/types.js";
@@ -10,26 +10,21 @@ const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
 
-try {
-  getDb();
-  console.log("SQLite prêt.");
-} catch (err) {
-  console.error("Impossible d'ouvrir SQLite :", err);
-  process.exit(1);
-}
-
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
   try {
-    getDb();
+    await initDb();
+    const cfg = getMysqlConfig();
     res.json({
       ok: true,
       service: "aubm-pcheck",
       host: HOST,
       port: PORT,
-      db: true,
+      db: "mysql",
+      mysqlHost: cfg.host,
+      mysqlDatabase: cfg.database,
     });
   } catch (err) {
     res.status(500).json({
@@ -39,14 +34,14 @@ app.get("/api/health", (_req, res) => {
   }
 });
 
-app.get("/api/fiches", (req, res) => {
+app.get("/api/fiches", async (req, res) => {
   try {
     const status = req.query.status as FicheStatus | undefined;
     if (status && status !== "draft" && status !== "finalized") {
       res.status(400).json({ error: "status invalide." });
       return;
     }
-    res.json(listFiches(status));
+    res.json(await listFiches(status));
   } catch (err) {
     console.error("GET /api/fiches", err);
     res.status(500).json({
@@ -55,7 +50,7 @@ app.get("/api/fiches", (req, res) => {
   }
 });
 
-app.post("/api/fiches", (req, res) => {
+app.post("/api/fiches", async (req, res) => {
   try {
     const body = req.body as FicheInput;
 
@@ -78,7 +73,7 @@ app.post("/api/fiches", (req, res) => {
       return;
     }
 
-    const fiche = upsertFiche(body);
+    const fiche = await upsertFiche(body);
     res.status(201).json(fiche);
   } catch (err) {
     console.error("POST /api/fiches", err);
@@ -88,9 +83,9 @@ app.post("/api/fiches", (req, res) => {
   }
 });
 
-app.get("/api/fiches/:id", (req, res) => {
+app.get("/api/fiches/:id", async (req, res) => {
   try {
-    const fiche = getFiche(req.params.id);
+    const fiche = await getFiche(req.params.id);
     if (!fiche) {
       res.status(404).json({ error: "Fiche introuvable." });
       return;
@@ -104,10 +99,10 @@ app.get("/api/fiches/:id", (req, res) => {
   }
 });
 
-app.put("/api/fiches/:id", (req, res) => {
+app.put("/api/fiches/:id", async (req, res) => {
   try {
     const body = req.body as FicheInput;
-    const fiche = upsertFiche({ ...body, id: req.params.id });
+    const fiche = await upsertFiche({ ...body, id: req.params.id });
     res.json(fiche);
   } catch (err) {
     console.error("PUT /api/fiches/:id", err);
@@ -117,9 +112,9 @@ app.put("/api/fiches/:id", (req, res) => {
   }
 });
 
-app.delete("/api/fiches/:id", (req, res) => {
+app.delete("/api/fiches/:id", async (req, res) => {
   try {
-    const ok = deleteFiche(req.params.id);
+    const ok = await deleteFiche(req.params.id);
     if (!ok) {
       res.status(404).json({ error: "Fiche introuvable." });
       return;
@@ -174,9 +169,24 @@ app.use(
   },
 );
 
-app.listen(PORT, HOST, () => {
-  console.log(`AUBM PCheck écoute sur http://${HOST}:${PORT}`);
-  console.log(`URL publique attendue : http://195.200.200.16:8091`);
-  console.log(`Racine projet : ${rootDir}`);
-  console.log(`Frontend : ${publicDir}`);
-});
+async function main() {
+  try {
+    await initDb();
+    const cfg = getMysqlConfig();
+    console.log(
+      `MySQL prêt (${cfg.host}:${cfg.port}/${cfg.database} user=${cfg.user})`,
+    );
+  } catch (err) {
+    console.error("Impossible de se connecter à MySQL :", err);
+    process.exit(1);
+  }
+
+  app.listen(PORT, HOST, () => {
+    console.log(`AUBM PCheck écoute sur http://${HOST}:${PORT}`);
+    console.log(`URL publique attendue : http://195.200.200.16:8091`);
+    console.log(`Racine projet : ${rootDir}`);
+    console.log(`Frontend : ${publicDir}`);
+  });
+}
+
+main();

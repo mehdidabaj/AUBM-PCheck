@@ -110,6 +110,7 @@ export default function AppShell() {
   const [drafts, setDrafts] = useState<PcTodoFiche[]>([]);
   const [history, setHistory] = useState<PcTodoFiche[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [finalizeOpen, setFinalizeOpen] = useState(false);
@@ -147,7 +148,7 @@ export default function AppShell() {
     window.setTimeout(() => setStatus(""), 3500);
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     const parseList = async (res: Response) => {
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -163,37 +164,42 @@ export default function AppShell() {
       return data as PcTodoFiche[];
     };
 
+    const opts: RequestInit = { signal };
     const [d, h] = await Promise.all([
-      fetch("/api/fiches?status=draft").then(parseList),
-      fetch("/api/fiches?status=finalized").then(parseList),
+      fetch("/api/fiches?status=draft", opts).then(parseList),
+      fetch("/api/fiches?status=finalized", opts).then(parseList),
     ]);
     setDrafts(d);
     setHistory(h);
   }, []);
 
+  const boot = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      await refresh(controller.signal);
+      setLoadError("");
+    } catch (err) {
+      setDrafts([]);
+      setHistory([]);
+      const message =
+        err instanceof DOMException && err.name === "AbortError"
+          ? "Délai dépassé : l’API ne répond pas (MySQL / service)."
+          : err instanceof Error
+            ? err.message
+            : "Impossible de charger les fiches.";
+      setLoadError(message);
+    } finally {
+      window.clearTimeout(timer);
+      setLoading(false);
+    }
+  }, [refresh]);
+
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await refresh();
-      } catch (err) {
-        if (!cancelled) {
-          setDrafts([]);
-          setHistory([]);
-          toast(
-            err instanceof Error
-              ? err.message
-              : "Impossible de charger les fiches.",
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [refresh, toast]);
+    void boot();
+  }, [boot]);
 
   const filteredHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
@@ -580,6 +586,29 @@ export default function AppShell() {
     return (
       <div className="grid min-h-screen place-items-center text-[var(--muted)]">
         Chargement…
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[var(--bg)] p-6">
+        <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-xl font-bold text-[var(--text)]">
+            Impossible de démarrer
+          </h1>
+          <p className="mt-3 text-sm text-[var(--danger)]">{loadError}</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Vérifiez le service et MySQL, puis réessayez.
+          </p>
+          <button
+            type="button"
+            onClick={() => void boot()}
+            className="mt-5 rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--accent-strong)]"
+          >
+            Réessayer
+          </button>
+        </div>
       </div>
     );
   }

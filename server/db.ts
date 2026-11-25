@@ -1,67 +1,102 @@
-import Database from "better-sqlite3";
 import fs from "fs";
+import mysql, { type Pool, type PoolOptions, type RowDataPacket } from "mysql2/promise";
 import path from "path";
 import { findProjectRoot } from "./paths.js";
 
-const rootDir = findProjectRoot(import.meta.url);
-const dataDir = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(rootDir, "data");
-const dbPath = path.join(dataDir, "todos.db");
+let pool: Pool | null = null;
 
-let db: Database.Database | null = null;
-
-function migrateTasksAccount(database: Database.Database) {
-  const cols = database
-    .prepare(`PRAGMA table_info(tasks)`)
-    .all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === "account")) {
-    database.exec(
-      `ALTER TABLE tasks ADD COLUMN account TEXT NOT NULL DEFAULT 'user'`,
-    );
+function loadEnvFile() {
+  const root = findProjectRoot(import.meta.url);
+  const envPath = path.join(root, ".env");
+  if (!fs.existsSync(envPath)) return;
+  const text = fs.readFileSync(envPath, "utf8");
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
   }
 }
 
-export function getDb() {
-  if (db) return db;
+export function getMysqlConfig(): PoolOptions {
+  loadEnvFile();
+  return {
+    host: process.env.MYSQL_HOST || "127.0.0.1",
+    port: Number(process.env.MYSQL_PORT || 3306),
+    user: process.env.MYSQL_USER || "aubm",
+    password: process.env.MYSQL_PASSWORD || "aubm_pcheck",
+    database: process.env.MYSQL_DATABASE || "aubm_pcheck",
+    waitForConnections: true,
+    connectionLimit: 10,
+    namedPlaceholders: true,
+    timezone: "Z",
+  };
+}
 
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-
-  db.exec(`
+async function migrate(poolInstance: Pool) {
+  await poolInstance.query(`
     CREATE TABLE IF NOT EXISTS fiches (
-      id TEXT PRIMARY KEY NOT NULL,
-      version TEXT NOT NULL,
-      owner TEXT NOT NULL,
-      pc_name TEXT NOT NULL,
-      start_date TEXT,
-      end_date TEXT,
-      status TEXT NOT NULL CHECK (status IN ('draft', 'finalized')),
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      finalized_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY NOT NULL,
-      fiche_id TEXT NOT NULL,
-      text TEXT NOT NULL,
-      done INTEGER NOT NULL DEFAULT 0,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      account TEXT NOT NULL DEFAULT 'user',
-      FOREIGN KEY (fiche_id) REFERENCES fiches(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_fiches_status ON fiches(status);
-    CREATE INDEX IF NOT EXISTS idx_tasks_fiche_id ON tasks(fiche_id);
+      id VARCHAR(36) PRIMARY KEY NOT NULL,
+      version VARCHAR(255) NOT NULL,
+      owner VARCHAR(255) NOT NULL,
+      pc_name VARCHAR(255) NOT NULL,
+      start_date VARCHAR(32) NULL,
+      end_date VARCHAR(32) NULL,
+      status VARCHAR(32) NOT NULL,
+      created_at VARCHAR(40) NOT NULL,
+      updated_at VARCHAR(40) NOT NULL,
+      finalized_at VARCHAR(40) NULL,
+      INDEX idx_fiches_status (status),
+      INDEX idx_fiches_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  migrateTasksAccount(db);
+  await poolInstance.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id VARCHAR(36) PRIMARY KEY NOT NULL,
+      fiche_id VARCHAR(36) NOT NULL,
+      text TEXT NOT NULL,
+      done TINYINT(1) NOT NULL DEFAULT 0,
+      sort_order INT NOT NULL DEFAULT 0,
+      account VARCHAR(16) NOT NULL DEFAULT 'user',
+      INDEX idx_tasks_fiche_id (fiche_id),
+      CONSTRAINT fk_tasks_fiche
+        FOREIGN KEY (fiche_id) REFERENCES fiches(id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+}
 
-  return db;
+export async function initDb() {
+  if (pool) return pool;
+  const config = getMysqlConfig();
+  pool = mysql.createPool(config);
+  await migrate(pool);
+  await pool.query<RowDataPacket[]>("SELECT 1 AS ok");
+  return pool;
+}
+
+export function getPool(): Pool {
+  if (!pool) {
+    throw new Error("MySQL non initialisé. Appelez initDb() au démarrage.");
+  }
+  return pool;
+}
+
+export async function closeDb() {
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

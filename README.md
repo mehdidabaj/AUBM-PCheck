@@ -1,8 +1,8 @@
-# AUBM PCheck (Express + React + SQLite)
+# AUBM PCheck (Express + React + MySQL)
 
-Application de fiches de préparation PC, sans Next.js.
+Application de fiches de préparation PC.
 
-- **API** : Node.js + Express + SQLite (`better-sqlite3`)
+- **API** : Node.js + Express + **MySQL/MariaDB**
 - **UI** : React (Vite) + Tailwind
 - **Écoute production** : `0.0.0.0:8091` → `http://195.200.200.16:8091`
 
@@ -12,21 +12,36 @@ Application de fiches de préparation PC, sans Next.js.
 - Tâches admin / utilisateur (listes séparées), import, édition, suppression, réordonnancement
 - Brouillons, finalisation, historique
 - Export PDF / impression
-- Données : `data/todos.db`
+
+## Variables d’environnement
+
+Voir `.env.example` :
+
+| Variable | Défaut | Rôle |
+|----------|--------|------|
+| `HOST` | `0.0.0.0` | Interface d’écoute |
+| `PORT` | `8091` | Port HTTP |
+| `MYSQL_HOST` | `127.0.0.1` | Hôte MySQL |
+| `MYSQL_PORT` | `3306` | Port MySQL |
+| `MYSQL_USER` | `aubm` | Utilisateur |
+| `MYSQL_PASSWORD` | `aubm_pcheck` | Mot de passe |
+| `MYSQL_DATABASE` | `aubm_pcheck` | Base |
 
 ## Développement
 
-Prérequis : Node.js 20+
+Prérequis : Node.js 20+, MySQL/MariaDB local.
 
 ```bash
+cp .env.example .env
+# créez la base/utilisateur MySQL, puis :
 npm install
 npm run dev
 ```
 
 - API : http://127.0.0.1:8091  
-- UI Vite (proxy API) : http://127.0.0.1:5173  
+- UI Vite : http://127.0.0.1:5173  
 
-## Production (locale)
+## Production
 
 ```bash
 npm install
@@ -36,26 +51,14 @@ HOST=0.0.0.0 PORT=8091 npm start
 
 ## Déploiement Debian (`195.200.200.16:8091`)
 
-Sur le serveur :
-
 ```bash
 sudo bash deploy/install-debian.sh
 ```
 
-Le script installe Node 20, clone la branche, build, crée l’utilisateur `aubm`, active le service systemd `aubm-pcheck` sur le port **8091**.
-
-Commandes utiles :
+Le script installe Node 20 + MariaDB, crée la base, build l’app et active `systemd` sur le port **8091**.
 
 ```bash
 sudo systemctl status aubm-pcheck
 sudo journalctl -u aubm-pcheck -f
 curl -s http://195.200.200.16:8091/api/health
 ```
-
-Variables (fichier `/opt/aubm-pcheck/.env`) :
-
-| Variable  | Défaut        | Rôle                |
-|-----------|---------------|---------------------|
-| `HOST`    | `0.0.0.0`     | Interface d’écoute  |
-| `PORT`    | `8091`        | Port HTTP           |
-| `DATA_DIR`| `./data`      | Dossier SQLite      |

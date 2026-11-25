@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
-import { getDb } from "./db.js";
+import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { getPool } from "./db.js";
 import type {
   FicheInput,
   FicheStatus,
@@ -8,7 +9,7 @@ import type {
   TaskItem,
 } from "../shared/types.js";
 
-type FicheRow = {
+type FicheRow = RowDataPacket & {
   id: string;
   version: string;
   owner: string;
@@ -21,11 +22,11 @@ type FicheRow = {
   finalized_at: string | null;
 };
 
-type TaskRow = {
+type TaskRow = RowDataPacket & {
   id: string;
   fiche_id: string;
   text: string;
-  done: number;
+  done: number | boolean;
   sort_order: number;
   account: string | null;
 };
@@ -38,7 +39,7 @@ function mapTasks(rows: TaskRow[]): TaskItem[] {
   return rows.map((r) => ({
     id: r.id,
     text: r.text,
-    done: r.done === 1,
+    done: r.done === 1 || r.done === true,
     sortOrder: r.sort_order,
     account: normalizeAccount(r.account),
   }));
@@ -60,52 +61,51 @@ function mapFiche(row: FicheRow, tasks: TaskItem[]): PcTodoFiche {
   };
 }
 
-export function listFiches(status?: FicheStatus): PcTodoFiche[] {
-  const database = getDb();
-  const rows = status
-    ? (database
-        .prepare(
-          `SELECT * FROM fiches WHERE status = ? ORDER BY updated_at DESC`,
-        )
-        .all(status) as FicheRow[])
-    : (database
-        .prepare(`SELECT * FROM fiches ORDER BY updated_at DESC`)
-        .all() as FicheRow[]);
-
-  const taskStmt = database.prepare(
-    `SELECT * FROM tasks WHERE fiche_id = ? ORDER BY
-      CASE account WHEN 'admin' THEN 0 ELSE 1 END,
-      sort_order ASC`,
+async function loadTasks(ficheId: string): Promise<TaskItem[]> {
+  const pool = getPool();
+  const [rows] = await pool.query<TaskRow[]>(
+    `SELECT * FROM tasks
+     WHERE fiche_id = ?
+     ORDER BY CASE account WHEN 'admin' THEN 0 ELSE 1 END, sort_order ASC`,
+    [ficheId],
   );
-
-  return rows.map((row) =>
-    mapFiche(row, mapTasks(taskStmt.all(row.id) as TaskRow[])),
-  );
+  return mapTasks(rows);
 }
 
-export function getFiche(id: string): PcTodoFiche | null {
-  const database = getDb();
-  const row = database
-    .prepare(`SELECT * FROM fiches WHERE id = ?`)
-    .get(id) as FicheRow | undefined;
-  if (!row) return null;
-  const tasks = mapTasks(
-    database
-      .prepare(
-        `SELECT * FROM tasks WHERE fiche_id = ? ORDER BY
-          CASE account WHEN 'admin' THEN 0 ELSE 1 END,
-          sort_order ASC`,
+export async function listFiches(status?: FicheStatus): Promise<PcTodoFiche[]> {
+  const pool = getPool();
+  const [rows] = status
+    ? await pool.query<FicheRow[]>(
+        `SELECT * FROM fiches WHERE status = ? ORDER BY updated_at DESC`,
+        [status],
       )
-      .all(id) as TaskRow[],
-  );
-  return mapFiche(row, tasks);
+    : await pool.query<FicheRow[]>(
+        `SELECT * FROM fiches ORDER BY updated_at DESC`,
+      );
+
+  const result: PcTodoFiche[] = [];
+  for (const row of rows) {
+    result.push(mapFiche(row, await loadTasks(row.id)));
+  }
+  return result;
 }
 
-export function upsertFiche(input: FicheInput): PcTodoFiche {
-  const database = getDb();
+export async function getFiche(id: string): Promise<PcTodoFiche | null> {
+  const pool = getPool();
+  const [rows] = await pool.query<FicheRow[]>(
+    `SELECT * FROM fiches WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return mapFiche(row, await loadTasks(id));
+}
+
+export async function upsertFiche(input: FicheInput): Promise<PcTodoFiche> {
+  const pool = getPool();
   const now = new Date().toISOString();
   const id = input.id?.trim() || randomUUID();
-  const existing = getFiche(id);
+  const existing = await getFiche(id);
 
   const createdAt = existing?.createdAt ?? now;
   const finalizedAt =
@@ -113,76 +113,87 @@ export function upsertFiche(input: FicheInput): PcTodoFiche {
       ? (input.finalizedAt ?? existing?.finalizedAt ?? now)
       : null;
 
-  const tx = database.transaction(() => {
-    database
-      .prepare(
-        `
-        INSERT INTO fiches (
-          id, version, owner, pc_name, start_date, end_date, status,
-          created_at, updated_at, finalized_at
-        ) VALUES (
-          @id, @version, @owner, @pc_name, @start_date, @end_date, @status,
-          @created_at, @updated_at, @finalized_at
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          version = excluded.version,
-          owner = excluded.owner,
-          pc_name = excluded.pc_name,
-          start_date = excluded.start_date,
-          end_date = excluded.end_date,
-          status = excluded.status,
-          updated_at = excluded.updated_at,
-          finalized_at = excluded.finalized_at
-      `,
-      )
-      .run({
-        id,
-        version: input.version.trim(),
-        owner: input.owner.trim(),
-        pc_name: input.pcName.trim(),
-        start_date: input.startDate,
-        end_date: input.endDate ?? null,
-        status: input.status,
-        created_at: createdAt,
-        updated_at: now,
-        finalized_at: finalizedAt,
-      });
+  const adminTasks = input.tasks.filter(
+    (t) => normalizeAccount(t.account) === "admin",
+  );
+  const userTasks = input.tasks.filter(
+    (t) => normalizeAccount(t.account) !== "admin",
+  );
+  const ordered = [...adminTasks, ...userTasks];
 
-    database.prepare(`DELETE FROM tasks WHERE fiche_id = ?`).run(id);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
 
-    const insertTask = database.prepare(
+    await conn.query(
       `
-      INSERT INTO tasks (id, fiche_id, text, done, sort_order, account)
-      VALUES (@id, @fiche_id, @text, @done, @sort_order, @account)
-    `,
+      INSERT INTO fiches (
+        id, version, owner, pc_name, start_date, end_date, status,
+        created_at, updated_at, finalized_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        version = VALUES(version),
+        owner = VALUES(owner),
+        pc_name = VALUES(pc_name),
+        start_date = VALUES(start_date),
+        end_date = VALUES(end_date),
+        status = VALUES(status),
+        updated_at = VALUES(updated_at),
+        finalized_at = VALUES(finalized_at)
+      `,
+      [
+        id,
+        input.version.trim(),
+        input.owner.trim(),
+        input.pcName.trim(),
+        input.startDate,
+        input.endDate ?? null,
+        input.status,
+        createdAt,
+        now,
+        finalizedAt,
+      ],
     );
 
-    const adminTasks = input.tasks.filter(
-      (t) => normalizeAccount(t.account) === "admin",
-    );
-    const userTasks = input.tasks.filter(
-      (t) => normalizeAccount(t.account) !== "admin",
-    );
-    const ordered = [...adminTasks, ...userTasks];
+    await conn.query(`DELETE FROM tasks WHERE fiche_id = ?`, [id]);
 
-    ordered.forEach((task, index) => {
-      insertTask.run({
-        id: task.id?.trim() || randomUUID(),
-        fiche_id: id,
-        text: task.text.trim(),
-        done: task.done ? 1 : 0,
-        sort_order: index,
-        account: normalizeAccount(task.account),
-      });
-    });
-  });
+    for (const [index, task] of ordered.entries()) {
+      await conn.query(
+        `
+        INSERT INTO tasks (id, fiche_id, text, done, sort_order, account)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [
+          task.id?.trim() || randomUUID(),
+          id,
+          task.text.trim(),
+          task.done ? 1 : 0,
+          index,
+          normalizeAccount(task.account),
+        ],
+      );
+    }
 
-  tx();
-  return getFiche(id)!;
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+
+  const fiche = await getFiche(id);
+  if (!fiche) {
+    throw new Error("Fiche introuvable après enregistrement.");
+  }
+  return fiche;
 }
 
-export function deleteFiche(id: string): boolean {
-  const database = getDb();
-  const result = database.prepare(`DELETE FROM fiches WHERE id = ?`).run(id);
-  return result.changes > 0;
+export async function deleteFiche(id: string): Promise<boolean> {
+  const pool = getPool();
+  const [result] = await pool.query<ResultSetHeader>(
+    `DELETE FROM fiches WHERE id = ?`,
+    [id],
+  );
+  return result.affectedRows > 0;
 }

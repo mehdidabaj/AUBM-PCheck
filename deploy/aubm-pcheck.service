@@ -1,6 +1,7 @@
 [Unit]
-Description=AUBM PCheck (Express + SQLite)
-After=network.target
+Description=AUBM PCheck (Express + MySQL)
+After=network.target mysql.service mariadb.service
+Wants=mysql.service mariadb.service
 
 [Service]
 Type=simple
@@ -11,7 +12,6 @@ EnvironmentFile=-/opt/aubm-pcheck/.env
 Environment=NODE_ENV=production
 Environment=HOST=0.0.0.0
 Environment=PORT=8091
-Environment=DATA_DIR=/opt/aubm-pcheck/data
 ExecStart=/usr/bin/node /opt/aubm-pcheck/dist/server/index.js
 Restart=on-failure
 RestartSec=5
