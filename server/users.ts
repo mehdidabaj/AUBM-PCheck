@@ -29,40 +29,33 @@ function normalizeRole(role: string | undefined): AppRole {
   return role === "admin" ? "admin" : "reader";
 }
 
-export async function ensureBootstrapAdmin(): Promise<{
-  created: boolean;
-  username?: string;
-}> {
+export async function countUsers(): Promise<number> {
   const pool = getPool();
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT COUNT(*) AS c FROM users`,
   );
-  const count = Number((rows[0] as { c: number }).c || 0);
-  if (count > 0) {
-    // Le mot de passe en clair dans l'env ne sert plus après le bootstrap
-    delete process.env.ADMIN_PASSWORD;
-    return { created: false };
+  return Number((rows[0] as { c: number }).c || 0);
+}
+
+export async function needsInitialSetup(): Promise<boolean> {
+  return (await countUsers()) === 0;
+}
+
+/** Crée le tout premier compte (admin). Refusé s'il existe déjà des utilisateurs. */
+export async function setupInitialAdmin(input: {
+  username: string;
+  displayName: string;
+  password: string;
+}): Promise<PublicUser> {
+  if (!(await needsInitialSetup())) {
+    throw new Error("L’installation est déjà initialisée.");
   }
-
-  const username = (process.env.ADMIN_USERNAME || "admin").trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD || "AdminChangeMe!2026";
-  const displayName = process.env.ADMIN_DISPLAY_NAME || "Administrateur";
-  const hash = await bcrypt.hash(password, 12);
-  const now = new Date().toISOString();
-
-  await pool.query(
-    `INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'admin', ?, ?)`,
-    [randomUUID(), username, displayName, hash, now, now],
-  );
-
-  // Ne pas garder le secret en clair dans le process Node
-  delete process.env.ADMIN_PASSWORD;
-
-  console.log(
-    `Compte admin initial créé : ${username} (mot de passe hashé en MySQL — retirez ADMIN_PASSWORD du .env)`,
-  );
-  return { created: true, username };
+  return createUser({
+    username: input.username,
+    displayName: input.displayName || input.username,
+    password: input.password,
+    role: "admin",
+  });
 }
 
 export async function authenticate(

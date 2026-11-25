@@ -25,8 +25,9 @@ import {
   authenticate,
   createUser,
   deleteUser,
-  ensureBootstrapAdmin,
   listUsers,
+  needsInitialSetup,
+  setupInitialAdmin,
   updateUser,
 } from "./users.js";
 import type { AppRole, FicheInput, FicheStatus } from "../shared/types.js";
@@ -41,7 +42,7 @@ const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
 const isProd = process.env.NODE_ENV === "production";
-const BUILD_ID = "auth-mysql-2026-11-25e";
+const BUILD_ID = "setup-admin-2026-11-25f";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -148,6 +149,49 @@ app.get("/api/auth/me", (req: AuthedRequest, res) => {
     return;
   }
   res.json({ user: req.user });
+});
+
+app.get("/api/auth/setup", async (_req, res) => {
+  try {
+    res.json({ needsSetup: await needsInitialSetup() });
+  } catch (err) {
+    console.error("GET /api/auth/setup", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.post("/api/auth/setup", loginLimiter, async (req, res) => {
+  try {
+    if (!(await needsInitialSetup())) {
+      res.status(409).json({ error: "L’installation est déjà initialisée." });
+      return;
+    }
+    const username = String(req.body?.username || "");
+    const displayName = String(req.body?.displayName || username);
+    const password = String(req.body?.password || "");
+    const passwordConfirm = String(req.body?.passwordConfirm || "");
+
+    if (!username || !password) {
+      res.status(400).json({ error: "Identifiant et mot de passe requis." });
+      return;
+    }
+    if (password !== passwordConfirm) {
+      res.status(400).json({ error: "Les mots de passe ne correspondent pas." });
+      return;
+    }
+
+    const user = await setupInitialAdmin({ username, displayName, password });
+    const session = await createSession(user.id);
+    setSessionCookie(res, session.token, session.expiresAt);
+    res.status(201).json({ user });
+  } catch (err) {
+    console.error("POST /api/auth/setup", err);
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
 });
 
 app.post("/api/auth/login", loginLimiter, async (req, res) => {
@@ -406,12 +450,17 @@ app.use(
 async function main() {
   try {
     await initDb();
-    await ensureBootstrapAdmin();
     await purgeExpiredSessions();
     const cfg = getMysqlConfig();
+    const setup = await needsInitialSetup();
     console.log(
       `MySQL prêt (${cfg.host}:${cfg.port}/${cfg.database} user=${cfg.user})`,
     );
+    if (setup) {
+      console.log(
+        "Aucun utilisateur : ouvrez l’UI pour créer le premier administrateur.",
+      );
+    }
   } catch (err) {
     console.error("Impossible de se connecter à MySQL :", err);
     process.exit(1);

@@ -7,6 +7,16 @@ Application de fiches de préparation PC, protégée par authentification.
 - **Auth** : sessions cookie httpOnly, rôles **admin** / **lecteur**
 - **Prod** : `http://195.200.200.16:8091`
 
+## Premier démarrage
+
+Si aucun utilisateur n’existe, la **première page** propose de **créer le compte administrateur** (identifiant + mot de passe). Aucun mot de passe admin dans `.env`.
+
+Réinitialiser les comptes (réaffiche l’écran de setup) :
+
+```bash
+sudo bash /opt/aubm-pcheck/deploy/reset-auth.sh
+```
+
 ## Rôles
 
 | Rôle | Droits |
@@ -14,17 +24,12 @@ Application de fiches de préparation PC, protégée par authentification.
 | **admin** | CRUD fiches, checklist, finalisation, gestion des utilisateurs |
 | **lecteur** | Consultation brouillons/historique + PDF/impression |
 
-Au premier démarrage, un admin est créé via `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+## Sécurité
 
-## Sécurité (corrigée / recommandée)
-
-- Auth obligatoire sur l’API (sauf `/api/health`)
-- Mots de passe **applicatifs** hashés (bcrypt) en MySQL — jamais stockés en clair en base
-- `ADMIN_PASSWORD` dans `.env` = **bootstrap one-shot** seulement ; retiré après 1er démarrage
-- Fichier temporaire `ADMIN_BOOTSTRAP_ONCE.txt` (chmod 600) puis à supprimer
-- `.env` en `chmod 600` (contient encore le secret MySQL de connexion, normal)
-- Sessions serveur + cookie httpOnly / SameSite
-- Rate-limit login + API, Helmet/CSP, SQL paramétré
+- Mots de passe applicatifs hashés (bcrypt) en MySQL
+- Pas de `ADMIN_PASSWORD` en clair dans `.env`
+- `.env` en `chmod 600` (secret MySQL de connexion uniquement)
+- Sessions + cookie httpOnly, rate-limit, Helmet/CSP, SQL paramétré
 - **Recommandé** : HTTPS (nginx) + `COOKIE_SECURE=true`
 
 ## Déploiement Debian
@@ -35,10 +40,8 @@ cd /opt/aubm-pcheck
 git fetch origin && git checkout cursor/debian-express-8091-8e0b
 git reset --hard origin/cursor/debian-express-8091-8e0b
 sudo bash deploy/install-debian.sh
-curl -s http://127.0.0.1:8091/api/health
+sudo bash deploy/reset-auth.sh   # optionnel : forcer l’écran de création admin
 ```
-
-Identifiants admin initiaux : voir `/opt/aubm-pcheck/.env`.
 
 ## Développement
 

@@ -68,10 +68,21 @@ async function parseJsonError(res: Response): Promise<string> {
 
 export default function App() {
   const [user, setUser] = useState<PublicUser | null>(null);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [authSettled, setAuthSettled] = useState(false);
 
-  const checkSession = useCallback(async () => {
+  const bootAuth = useCallback(async () => {
     try {
+      const setupRes = await fetch("/api/auth/setup", fetchOpts);
+      if (setupRes.ok) {
+        const setupData = (await setupRes.json()) as { needsSetup?: boolean };
+        setNeedsSetup(Boolean(setupData.needsSetup));
+        if (setupData.needsSetup) {
+          setUser(null);
+          return;
+        }
+      }
+
       const res = await fetch("/api/auth/me", fetchOpts);
       if (res.ok) {
         const data = (await res.json()) as { user: PublicUser };
@@ -87,8 +98,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void checkSession();
-  }, [checkSession]);
+    void bootAuth();
+  }, [bootAuth]);
+
+  async function handleSetup(input: {
+    username: string;
+    displayName: string;
+    password: string;
+    passwordConfirm: string;
+  }) {
+    const res = await fetch("/api/auth/setup", {
+      ...fetchOpts,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      throw new Error(await parseJsonError(res));
+    }
+    const data = (await res.json()) as { user: PublicUser };
+    setNeedsSetup(false);
+    setUser(data.user);
+  }
 
   async function handleLogin(username: string, password: string) {
     const res = await fetch("/api/auth/login", {
@@ -110,24 +141,184 @@ export default function App() {
     setUser(null);
   }
 
+  if (!authSettled) {
+    return (
+      <div className="grid min-h-screen place-items-center text-[var(--muted)] anim-fade">
+        AUBM PCheck…
+      </div>
+    );
+  }
+
   if (user) {
     return <AppShell user={user} onLogout={() => void handleLogout()} />;
   }
 
+  if (needsSetup) {
+    return <SetupScreen onSetup={handleSetup} />;
+  }
+
+  return <LoginScreen onLogin={handleLogin} />;
+}
+
+function AuthShell({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
   return (
-    <LoginScreen
-      onLogin={handleLogin}
-      settling={!authSettled}
-    />
+    <div className="relative min-h-screen overflow-hidden anim-fade">
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(115deg, rgba(20,48,41,0.92) 0%, rgba(31,83,70,0.78) 42%, rgba(232,238,233,0.2) 42.2%, transparent 70%)",
+        }}
+      />
+      <div className="relative mx-auto grid min-h-screen max-w-6xl items-center gap-10 px-6 py-12 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="anim-rise text-white lg:pr-8">
+          <div className="brand-mark text-lg">PC</div>
+          <h1 className="font-display mt-8 text-5xl font-extrabold leading-[0.95] tracking-tight sm:text-6xl">
+            AUBM PCheck
+          </h1>
+          <p className="mt-5 max-w-md text-lg text-emerald-50/90">{subtitle}</p>
+        </div>
+        <div
+          className="panel anim-rise w-full max-w-md justify-self-end space-y-4 p-7"
+          style={{ animationDelay: "80ms" }}
+        >
+          <h2 className="font-display text-2xl font-bold text-[var(--text)]">
+            {title}
+          </h2>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SetupScreen({
+  onSetup,
+}: {
+  onSetup: (input: {
+    username: string;
+    displayName: string;
+    password: string;
+    passwordConfirm: string;
+  }) => Promise<void>;
+}) {
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (password !== passwordConfirm) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Mot de passe trop court (8 caractères minimum).");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSetup({
+        username: username.trim(),
+        displayName: displayName.trim() || username.trim(),
+        password,
+        passwordConfirm,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Création impossible.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell
+      title="Créer le compte administrateur"
+      subtitle="Première installation : définissez l’identifiant et le mot de passe du compte admin."
+    >
+      <p className="text-sm text-[var(--muted)]">
+        Ce compte aura le contrôle total. Aucun mot de passe n’est lu depuis un
+        fichier d’environnement.
+      </p>
+      <form onSubmit={submit} className="space-y-4">
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Identifiant
+          <input
+            autoComplete="username"
+            value={username}
+            disabled={busy}
+            onChange={(e) => setUsername(e.target.value)}
+            className="field mt-2"
+            placeholder="admin"
+            required
+          />
+        </label>
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Nom affiché
+          <input
+            value={displayName}
+            disabled={busy}
+            onChange={(e) => setDisplayName(e.target.value)}
+            className="field mt-2"
+            placeholder="Administrateur"
+          />
+        </label>
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Mot de passe
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            disabled={busy}
+            onChange={(e) => setPassword(e.target.value)}
+            className="field mt-2"
+            placeholder="8 caractères minimum"
+            required
+          />
+        </label>
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Confirmer le mot de passe
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={passwordConfirm}
+            disabled={busy}
+            onChange={(e) => setPasswordConfirm(e.target.value)}
+            className="field mt-2"
+            required
+          />
+        </label>
+        {error && (
+          <p className="text-sm font-semibold text-[var(--danger)]">{error}</p>
+        )}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
+        >
+          {busy ? "Création…" : "Créer l’administrateur"}
+        </button>
+      </form>
+    </AuthShell>
   );
 }
 
 function LoginScreen({
   onLogin,
-  settling,
 }: {
   onLogin: (username: string, password: string) => Promise<void>;
-  settling: boolean;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -148,78 +339,49 @@ function LoginScreen({
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden anim-fade">
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "linear-gradient(115deg, rgba(20,48,41,0.92) 0%, rgba(31,83,70,0.78) 42%, rgba(232,238,233,0.2) 42.2%, transparent 70%)",
-        }}
-      />
-      <div className="relative mx-auto grid min-h-screen max-w-6xl items-center gap-10 px-6 py-12 lg:grid-cols-[1.15fr_0.85fr]">
-        <div className="anim-rise text-white lg:pr-8">
-          <div className="brand-mark text-lg">PC</div>
-          <h1 className="font-display mt-8 text-5xl font-extrabold leading-[0.95] tracking-tight sm:text-6xl">
-            AUBM PCheck
-          </h1>
-          <p className="mt-5 max-w-md text-lg text-emerald-50/90">
-            Accès sécurisé aux fiches de préparation PC.
-          </p>
-        </div>
-
-        <form
-          onSubmit={submit}
-          className="panel anim-rise w-full max-w-md justify-self-end space-y-4 p-7"
-          style={{ animationDelay: "80ms" }}
+    <AuthShell
+      title="Connexion"
+      subtitle="Accès sécurisé aux fiches de préparation PC."
+    >
+      <p className="text-sm text-[var(--muted)]">
+        Compte administrateur ou lecteur.
+      </p>
+      <form onSubmit={submit} className="space-y-4">
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Identifiant
+          <input
+            autoComplete="username"
+            value={username}
+            disabled={busy}
+            onChange={(e) => setUsername(e.target.value)}
+            className="field mt-2"
+            placeholder="nom.utilisateur"
+          />
+        </label>
+        <label className="block text-xs font-semibold text-[var(--muted)]">
+          Mot de passe
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            disabled={busy}
+            onChange={(e) => setPassword(e.target.value)}
+            className="field mt-2"
+            placeholder="••••••••"
+          />
+        </label>
+        {error && (
+          <p className="text-sm font-semibold text-[var(--danger)]">{error}</p>
+        )}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
         >
-          <h2 className="font-display text-2xl font-bold text-[var(--text)]">
-            Connexion
-          </h2>
-          <p className="text-sm text-[var(--muted)]">
-            Compte administrateur ou lecteur.
-          </p>
-          <label className="block text-xs font-semibold text-[var(--muted)]">
-            Identifiant
-            <input
-              autoComplete="username"
-              value={username}
-              disabled={busy}
-              onChange={(e) => setUsername(e.target.value)}
-              className="field mt-2"
-              placeholder="nom.utilisateur"
-            />
-          </label>
-          <label className="block text-xs font-semibold text-[var(--muted)]">
-            Mot de passe
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              disabled={busy}
-              onChange={(e) => setPassword(e.target.value)}
-              className="field mt-2"
-              placeholder="••••••••"
-            />
-          </label>
-
-          {error && (
-            <p className="text-sm font-semibold text-[var(--danger)]">{error}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={busy || settling}
-            className="w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
-          >
-            {busy
-              ? "Connexion…"
-              : settling
-                ? "Vérification de session…"
-                : "Se connecter"}
-          </button>
-        </form>
-      </div>
-    </div>
+          {busy ? "Connexion…" : "Se connecter"}
+        </button>
+      </form>
+    </AuthShell>
   );
 }
 
