@@ -1,6 +1,12 @@
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
-import type { FicheInput, FicheStatus, PcTodoFiche, TaskItem } from "./types";
+import type {
+  FicheInput,
+  FicheStatus,
+  PcTodoFiche,
+  TaskAccount,
+  TaskItem,
+} from "./types";
 
 type FicheRow = {
   id: string;
@@ -21,7 +27,12 @@ type TaskRow = {
   text: string;
   done: number;
   sort_order: number;
+  account: string | null;
 };
+
+function normalizeAccount(value: string | null | undefined): TaskAccount {
+  return value === "admin" ? "admin" : "user";
+}
 
 function mapTasks(rows: TaskRow[]): TaskItem[] {
   return rows.map((r) => ({
@@ -29,6 +40,7 @@ function mapTasks(rows: TaskRow[]): TaskItem[] {
     text: r.text,
     done: r.done === 1,
     sortOrder: r.sort_order,
+    account: normalizeAccount(r.account),
   }));
 }
 
@@ -61,7 +73,9 @@ export function listFiches(status?: FicheStatus): PcTodoFiche[] {
         .all() as FicheRow[]);
 
   const taskStmt = database.prepare(
-    `SELECT * FROM tasks WHERE fiche_id = ? ORDER BY sort_order ASC`,
+    `SELECT * FROM tasks WHERE fiche_id = ? ORDER BY
+      CASE account WHEN 'admin' THEN 0 ELSE 1 END,
+      sort_order ASC`,
   );
 
   return rows.map((row) =>
@@ -77,7 +91,11 @@ export function getFiche(id: string): PcTodoFiche | null {
   if (!row) return null;
   const tasks = mapTasks(
     database
-      .prepare(`SELECT * FROM tasks WHERE fiche_id = ? ORDER BY sort_order ASC`)
+      .prepare(
+        `SELECT * FROM tasks WHERE fiche_id = ? ORDER BY
+          CASE account WHEN 'admin' THEN 0 ELSE 1 END,
+          sort_order ASC`,
+      )
       .all(id) as TaskRow[],
   );
   return mapFiche(row, tasks);
@@ -134,18 +152,27 @@ export function upsertFiche(input: FicheInput): PcTodoFiche {
 
     const insertTask = database.prepare(
       `
-      INSERT INTO tasks (id, fiche_id, text, done, sort_order)
-      VALUES (@id, @fiche_id, @text, @done, @sort_order)
+      INSERT INTO tasks (id, fiche_id, text, done, sort_order, account)
+      VALUES (@id, @fiche_id, @text, @done, @sort_order, @account)
     `,
     );
 
-    input.tasks.forEach((task, index) => {
+    const adminTasks = input.tasks.filter(
+      (t) => normalizeAccount(t.account) === "admin",
+    );
+    const userTasks = input.tasks.filter(
+      (t) => normalizeAccount(t.account) !== "admin",
+    );
+    const ordered = [...adminTasks, ...userTasks];
+
+    ordered.forEach((task, index) => {
       insertTask.run({
         id: task.id?.trim() || randomUUID(),
         fiche_id: id,
         text: task.text.trim(),
         done: task.done ? 1 : 0,
         sort_order: index,
+        account: normalizeAccount(task.account),
       });
     });
   });

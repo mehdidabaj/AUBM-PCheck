@@ -1,11 +1,57 @@
 import { jsPDF } from "jspdf";
-import type { PcTodoFiche } from "./types";
+import type { PcTodoFiche, TaskAccount, TaskItem } from "./types";
 
 function formatDate(value: string | null) {
   if (!value) return "—";
   const [y, m, d] = value.split("-");
   if (!y || !m || !d) return value;
   return `${d}/${m}/${y}`;
+}
+
+function accountLabel(account: TaskAccount) {
+  return account === "admin" ? "Compte administrateur" : "Compte utilisateur";
+}
+
+function writeTaskSection(
+  doc: jsPDF,
+  y: number,
+  title: string,
+  tasks: TaskItem[],
+): number {
+  if (y > 265) {
+    doc.addPage();
+    y = 20;
+  }
+
+  doc.setFontSize(12);
+  doc.setTextColor(15, 118, 110);
+  doc.text(title, 20, y);
+  y += 6;
+  doc.setFontSize(9);
+  doc.setTextColor(90, 100, 120);
+  const done = tasks.filter((t) => t.done).length;
+  doc.text(`${done} / ${tasks.length} cochée(s)`, 20, y);
+  y += 7;
+  doc.setTextColor(20, 32, 51);
+  doc.setFontSize(10);
+
+  if (!tasks.length) {
+    doc.text("Aucune tâche", 24, y);
+    y += 8;
+    return y;
+  }
+
+  for (const task of tasks) {
+    if (y > 280) {
+      doc.addPage();
+      y = 20;
+    }
+    const mark = task.done ? "[x]" : "[ ]";
+    doc.text(`${mark}  ${task.text}`, 24, y, { maxWidth: 166 });
+    y += 8;
+  }
+
+  return y + 4;
 }
 
 export function buildPdf(fiche: PcTodoFiche) {
@@ -49,28 +95,20 @@ export function buildPdf(fiche: PcTodoFiche) {
 
   y += 8;
   doc.setFontSize(13);
+  doc.setTextColor(20, 32, 51);
   doc.text("Checklist des tâches", 20, y);
   y += 7;
   doc.setFontSize(10);
   doc.setTextColor(90, 100, 120);
   const done = fiche.tasks.filter((t) => t.done).length;
   doc.text(`${done} / ${fiche.tasks.length} tâches cochées`, 20, y);
-  y += 8;
-  doc.setTextColor(20, 32, 51);
+  y += 10;
 
-  if (!fiche.tasks.length) {
-    doc.text("Aucune tâche", 20, y);
-  } else {
-    for (const task of fiche.tasks) {
-      if (y > 280) {
-        doc.addPage();
-        y = 20;
-      }
-      const mark = task.done ? "[x]" : "[ ]";
-      doc.text(`${mark}  ${task.text}`, 20, y, { maxWidth: 170 });
-      y += 8;
-    }
-  }
+  const adminTasks = fiche.tasks.filter((t) => t.account === "admin");
+  const userTasks = fiche.tasks.filter((t) => t.account !== "admin");
+
+  y = writeTaskSection(doc, y, accountLabel("admin"), adminTasks);
+  y = writeTaskSection(doc, y, accountLabel("user"), userTasks);
 
   return doc;
 }

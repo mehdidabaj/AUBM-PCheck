@@ -7,6 +7,17 @@ const dbPath = path.join(dataDir, "todos.db");
 
 let db: Database.Database | null = null;
 
+function migrateTasksAccount(database: Database.Database) {
+  const cols = database
+    .prepare(`PRAGMA table_info(tasks)`)
+    .all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "account")) {
+    database.exec(
+      `ALTER TABLE tasks ADD COLUMN account TEXT NOT NULL DEFAULT 'user'`,
+    );
+  }
+}
+
 export function getDb() {
   if (db) return db;
 
@@ -38,12 +49,15 @@ export function getDb() {
       text TEXT NOT NULL,
       done INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      account TEXT NOT NULL DEFAULT 'user',
       FOREIGN KEY (fiche_id) REFERENCES fiches(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_fiches_status ON fiches(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_fiche_id ON tasks(fiche_id);
   `);
+
+  migrateTasksAccount(db);
 
   return db;
 }

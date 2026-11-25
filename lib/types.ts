@@ -1,10 +1,14 @@
 export type FicheStatus = "draft" | "finalized";
 
+/** Compte Windows sur lequel la tâche doit être réalisée */
+export type TaskAccount = "admin" | "user";
+
 export type TaskItem = {
   id: string;
   text: string;
   done: boolean;
   sortOrder: number;
+  account: TaskAccount;
 };
 
 export type PcTodoFiche = {
@@ -30,5 +34,10 @@ export type FicheInput = {
   endDate?: string | null;
   status: FicheStatus;
   finalizedAt?: string | null;
-  tasks: Array<{ id?: string; text: string; done: boolean }>;
+  tasks: Array<{
+    id?: string;
+    text: string;
+    done: boolean;
+    account?: TaskAccount;
+  }>;
 };

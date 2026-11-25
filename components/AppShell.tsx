@@ -9,13 +9,27 @@ import {
   useState,
 } from "react";
 import { downloadPdf, printPdf } from "@/lib/pdf";
-import type { PcTodoFiche, TaskItem } from "@/lib/types";
+import type { PcTodoFiche, TaskAccount, TaskItem } from "@/lib/types";
 
 type View = "editor" | "drafts" | "history";
 
 type EditorTask = TaskItem;
 
 const emptyTasks: EditorTask[] = [];
+
+function accountLabel(account: TaskAccount) {
+  return account === "admin" ? "Administrateur" : "Utilisateur";
+}
+
+function normalizeAccount(value: TaskAccount | string | undefined): TaskAccount {
+  return value === "admin" ? "admin" : "user";
+}
+
+function sortTasksByAccount(list: EditorTask[]): EditorTask[] {
+  const admin = list.filter((t) => t.account === "admin");
+  const user = list.filter((t) => t.account !== "admin");
+  return [...admin, ...user].map((t, index) => ({ ...t, sortOrder: index }));
+}
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -49,12 +63,24 @@ export default function AppShell() {
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
   const [newTask, setNewTask] = useState("");
+  const [newTaskAccount, setNewTaskAccount] = useState<TaskAccount>("user");
   const [pasteBlock, setPasteBlock] = useState("");
+  const [pasteAccount, setPasteAccount] = useState<TaskAccount>("user");
   const [tasks, setTasks] = useState<EditorTask[]>(emptyTasks);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [editingAccount, setEditingAccount] = useState<TaskAccount>("user");
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+
+  const adminTasks = useMemo(
+    () => tasks.filter((t) => t.account === "admin"),
+    [tasks],
+  );
+  const userTasks = useMemo(
+    () => tasks.filter((t) => t.account !== "admin"),
+    [tasks],
+  );
 
   const toast = useCallback((message: string) => {
     setStatus(message);
@@ -95,10 +121,13 @@ export default function AppShell() {
     setStartDate(todayISO());
     setEndDate(todayISO());
     setNewTask("");
+    setNewTaskAccount("user");
     setPasteBlock("");
+    setPasteAccount("user");
     setTasks([]);
     setEditingTaskId(null);
     setEditingText("");
+    setEditingAccount("user");
     setDragTaskId(null);
     setDragOverTaskId(null);
     setView("editor");
@@ -112,13 +141,22 @@ export default function AppShell() {
     setPcName(fiche.pcName);
     setStartDate(fiche.startDate || todayISO());
     setEndDate(fiche.endDate || todayISO());
-    setTasks(fiche.tasks.map((t) => ({ ...t })));
+    setTasks(
+      sortTasksByAccount(
+        fiche.tasks.map((t) => ({
+          ...t,
+          account: normalizeAccount(t.account),
+        })),
+      ),
+    );
     setEditingTaskId(null);
     setEditingText("");
+    setEditingAccount("user");
     setView("editor");
   }
 
   function collect(status: "draft" | "finalized") {
+    const ordered = sortTasksByAccount(tasks);
     return {
       id: currentId || undefined,
       version: version.trim(),
@@ -128,11 +166,11 @@ export default function AppShell() {
       endDate: status === "finalized" ? endDate : null,
       status,
       finalizedAt: status === "finalized" ? new Date().toISOString() : null,
-      tasks: tasks.map((t, index) => ({
+      tasks: ordered.map((t) => ({
         id: t.id,
         text: t.text,
         done: t.done,
-        sortOrder: index,
+        account: t.account,
       })),
     };
   }
@@ -169,10 +207,18 @@ export default function AppShell() {
       toast("Saisissez le libellé de la tâche.");
       return;
     }
-    setTasks((prev) => [
-      ...prev,
-      { id: uid(), text, done: false, sortOrder: prev.length },
-    ]);
+    setTasks((prev) =>
+      sortTasksByAccount([
+        ...prev,
+        {
+          id: uid(),
+          text,
+          done: false,
+          sortOrder: prev.length,
+          account: newTaskAccount,
+        },
+      ]),
+    );
     setNewTask("");
   }
 
@@ -189,33 +235,34 @@ export default function AppShell() {
       text,
       done: false,
       sortOrder: index,
+      account: pasteAccount,
     }));
 
     if (mode === "replace") {
-      setTasks(incoming);
-      toast(`${incoming.length} tâche(s) importée(s) (liste remplacée).`);
+      setTasks(sortTasksByAccount(incoming));
+      toast(
+        `${incoming.length} tâche(s) importée(s) (${accountLabel(pasteAccount)}, liste remplacée).`,
+      );
     } else {
       setTasks((prev) => {
-        const existing = new Set(prev.map((t) => t.text.toLowerCase()));
+        const existing = new Set(
+          prev
+            .filter((t) => t.account === pasteAccount)
+            .map((t) => t.text.toLowerCase()),
+        );
         const unique = incoming.filter(
           (t) => !existing.has(t.text.toLowerCase()),
         );
         toast(
           unique.length
-            ? `${unique.length} tâche(s) ajoutée(s)${
+            ? `${unique.length} tâche(s) ${accountLabel(pasteAccount).toLowerCase()} ajoutée(s)${
                 unique.length < incoming.length
                   ? ` (${incoming.length - unique.length} doublon(s) ignoré(s))`
                   : ""
               }.`
             : "Aucune nouvelle tâche (doublons uniquement).",
         );
-        return [
-          ...prev,
-          ...unique.map((t, i) => ({
-            ...t,
-            sortOrder: prev.length + i,
-          })),
-        ];
+        return sortTasksByAccount([...prev, ...unique]);
       });
     }
     setPasteBlock("");
@@ -225,11 +272,13 @@ export default function AppShell() {
     if (isReadOnly) return;
     setEditingTaskId(task.id);
     setEditingText(task.text);
+    setEditingAccount(task.account);
   }
 
   function cancelEditTask() {
     setEditingTaskId(null);
     setEditingText("");
+    setEditingAccount("user");
   }
 
   function saveEditTask() {
@@ -240,7 +289,13 @@ export default function AppShell() {
       return;
     }
     setTasks((prev) =>
-      prev.map((t) => (t.id === editingTaskId ? { ...t, text } : t)),
+      sortTasksByAccount(
+        prev.map((t) =>
+          t.id === editingTaskId
+            ? { ...t, text, account: editingAccount }
+            : t,
+        ),
+      ),
     );
     cancelEditTask();
     toast("Tâche modifiée.");
@@ -249,9 +304,7 @@ export default function AppShell() {
   function deleteTask(id: string) {
     if (isReadOnly) return;
     setTasks((prev) =>
-      prev
-        .filter((t) => t.id !== id)
-        .map((t, index) => ({ ...t, sortOrder: index })),
+      sortTasksByAccount(prev.filter((t) => t.id !== id)),
     );
     if (editingTaskId === id) cancelEditTask();
   }
@@ -264,22 +317,56 @@ export default function AppShell() {
     toast("Liste des tâches vidée.");
   }
 
-  function moveTask(fromIndex: number, toIndex: number) {
+  function clearTasksByAccount(account: TaskAccount) {
     if (isReadOnly) return;
+    const label = accountLabel(account).toLowerCase();
     if (
-      fromIndex < 0 ||
-      toIndex < 0 ||
-      fromIndex >= tasks.length ||
-      toIndex >= tasks.length ||
-      fromIndex === toIndex
+      !window.confirm(
+        `Supprimer toutes les tâches ${label} ?`,
+      )
     ) {
       return;
     }
+    setTasks((prev) =>
+      sortTasksByAccount(prev.filter((t) => t.account !== account)),
+    );
+    cancelEditTask();
+    toast(`Tâches ${label} vidées.`);
+  }
+
+  function setTaskAccount(id: string, account: TaskAccount) {
+    if (isReadOnly) return;
+    setTasks((prev) =>
+      sortTasksByAccount(
+        prev.map((t) => (t.id === id ? { ...t, account } : t)),
+      ),
+    );
+  }
+
+  function moveTaskInAccount(
+    account: TaskAccount,
+    fromIndex: number,
+    toIndex: number,
+  ) {
+    if (isReadOnly) return;
     setTasks((prev) => {
-      const next = [...prev];
+      const group = prev.filter((t) => t.account === account);
+      const other = prev.filter((t) => t.account !== account);
+      if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= group.length ||
+        toIndex >= group.length ||
+        fromIndex === toIndex
+      ) {
+        return prev;
+      }
+      const next = [...group];
       const [item] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, item);
-      return next.map((t, index) => ({ ...t, sortOrder: index }));
+      const admin = account === "admin" ? next : other;
+      const user = account === "user" ? next : other;
+      return sortTasksByAccount([...admin, ...user]);
     });
   }
 
@@ -290,6 +377,9 @@ export default function AppShell() {
 
   function onTaskDragOver(e: DragEvent, taskId: string) {
     if (isReadOnly || !dragTaskId || dragTaskId === taskId) return;
+    const source = tasks.find((t) => t.id === dragTaskId);
+    const target = tasks.find((t) => t.id === taskId);
+    if (!source || !target || source.account !== target.account) return;
     e.preventDefault();
     setDragOverTaskId(taskId);
   }
@@ -300,9 +390,17 @@ export default function AppShell() {
       setDragOverTaskId(null);
       return;
     }
-    const fromIndex = tasks.findIndex((t) => t.id === dragTaskId);
-    const toIndex = tasks.findIndex((t) => t.id === targetId);
-    moveTask(fromIndex, toIndex);
+    const source = tasks.find((t) => t.id === dragTaskId);
+    const target = tasks.find((t) => t.id === targetId);
+    if (!source || !target || source.account !== target.account) {
+      setDragTaskId(null);
+      setDragOverTaskId(null);
+      return;
+    }
+    const group = tasks.filter((t) => t.account === source.account);
+    const fromIndex = group.findIndex((t) => t.id === dragTaskId);
+    const toIndex = group.findIndex((t) => t.id === targetId);
+    moveTaskInAccount(source.account, fromIndex, toIndex);
     setDragTaskId(null);
     setDragOverTaskId(null);
   }
@@ -538,9 +636,19 @@ export default function AppShell() {
             <Card>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <SectionTitle>Tâches à faire</SectionTitle>
-                <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
-                  {tasks.filter((t) => t.done).length} / {tasks.length} cochées
-                </span>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                    Admin {adminTasks.filter((t) => t.done).length}/
+                    {adminTasks.length}
+                  </span>
+                  <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800">
+                    Utilisateur {userTasks.filter((t) => t.done).length}/
+                    {userTasks.length}
+                  </span>
+                  <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
+                    Total {tasks.filter((t) => t.done).length}/{tasks.length}
+                  </span>
+                </div>
               </div>
 
               <div className="mt-4 space-y-2">
@@ -557,23 +665,41 @@ export default function AppShell() {
                   }
                   className="field min-h-28 resize-y"
                 />
-                <div className="flex flex-wrap gap-2">
-                  <Btn
-                    primary
-                    disabled={isReadOnly}
-                    onClick={() => importFromPaste("append")}
-                  >
-                    Importer (ajouter)
-                  </Btn>
-                  <Btn
-                    disabled={isReadOnly}
-                    onClick={() => importFromPaste("replace")}
-                  >
-                    Remplacer toute la liste
-                  </Btn>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs font-semibold text-[var(--muted)]">
+                    Compte pour l’import
+                    <select
+                      value={pasteAccount}
+                      disabled={isReadOnly}
+                      onChange={(e) =>
+                        setPasteAccount(e.target.value as TaskAccount)
+                      }
+                      className="field mt-1 min-w-44"
+                    >
+                      <option value="admin">Administrateur</option>
+                      <option value="user">Utilisateur</option>
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap gap-2 self-end">
+                    <Btn
+                      primary
+                      disabled={isReadOnly}
+                      onClick={() => importFromPaste("append")}
+                    >
+                      Importer (ajouter)
+                    </Btn>
+                    <Btn
+                      disabled={isReadOnly}
+                      onClick={() => importFromPaste("replace")}
+                    >
+                      Remplacer toute la liste
+                    </Btn>
+                  </div>
                 </div>
                 <p className="text-xs text-[var(--muted)]">
-                  Accepte aussi les puces (-, •), numéros (1.) et cases [ ].
+                  Chaque tâche importée est marquée pour le compte choisi
+                  (admin ou utilisateur). Accepte aussi les puces (-, •),
+                  numéros (1.) et cases [ ].
                 </p>
               </div>
 
@@ -582,14 +708,31 @@ export default function AppShell() {
               <label className="mb-2 block text-xs font-semibold text-[var(--muted)]">
                 Ajout manuel
               </label>
-              <form onSubmit={addTask} className="flex gap-2">
+              <form
+                onSubmit={addTask}
+                className="flex flex-wrap items-end gap-2"
+              >
                 <input
                   value={newTask}
                   disabled={isReadOnly}
                   onChange={(e) => setNewTask(e.target.value)}
                   placeholder="Saisir une tâche à ajouter…"
-                  className="field flex-1"
+                  className="field min-w-48 flex-1"
                 />
+                <label className="text-xs font-semibold text-[var(--muted)]">
+                  Compte
+                  <select
+                    value={newTaskAccount}
+                    disabled={isReadOnly}
+                    onChange={(e) =>
+                      setNewTaskAccount(e.target.value as TaskAccount)
+                    }
+                    className="field mt-1 min-w-40"
+                  >
+                    <option value="admin">Administrateur</option>
+                    <option value="user">Utilisateur</option>
+                  </select>
+                </label>
                 <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
                   Ajouter
                 </Btn>
@@ -597,7 +740,8 @@ export default function AppShell() {
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--muted)]">
-                  Glissez une tâche pour changer son ordre, ou utilisez ▲ / ▼.
+                  Les listes sont séparées par compte. Glissez ou utilisez ▲ /
+                  ▼ pour réordonner dans une même liste.
                 </p>
                 {!isReadOnly && tasks.length > 0 && (
                   <button
@@ -605,155 +749,83 @@ export default function AppShell() {
                     onClick={clearAllTasks}
                     className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
                   >
-                    Vider la liste
+                    Vider toutes les tâches
                   </button>
                 )}
               </div>
 
-              <div className="mt-3 space-y-2">
-                {tasks.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-[var(--line)] bg-[#f4f7fb] px-4 py-8 text-center">
-                    <div className="font-semibold">Aucune tâche pour l’instant</div>
-                    <div className="mt-1 text-sm text-[var(--muted)]">
-                      Collez une liste ci-dessus, ou ajoutez une tâche manuellement.
-                    </div>
+              {tasks.length === 0 ? (
+                <div className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[#f4f7fb] px-4 py-8 text-center">
+                  <div className="font-semibold">Aucune tâche pour l’instant</div>
+                  <div className="mt-1 text-sm text-[var(--muted)]">
+                    Collez une liste ou ajoutez une tâche en précisant le
+                    compte (admin / utilisateur).
                   </div>
-                ) : (
-                  tasks.map((task, index) => {
-                    const isEditing = editingTaskId === task.id;
-                    const isDragging = dragTaskId === task.id;
-                    const isDropTarget = dragOverTaskId === task.id;
-
-                    return (
-                      <div
-                        key={task.id}
-                        draggable={!isReadOnly && !isEditing}
-                        onDragStart={() => onTaskDragStart(task.id)}
-                        onDragOver={(e) => onTaskDragOver(e, task.id)}
-                        onDrop={() => onTaskDrop(task.id)}
-                        onDragEnd={onTaskDragEnd}
-                        className={`flex items-center gap-2 rounded-xl border bg-[#f4f7fb] px-3 py-2 transition ${
-                          isDropTarget
-                            ? "border-[var(--accent)] ring-2 ring-teal-200"
-                            : "border-[var(--line)]"
-                        } ${isDragging ? "opacity-50" : ""} ${
-                          !isReadOnly && !isEditing ? "cursor-grab active:cursor-grabbing" : ""
-                        }`}
-                      >
-                        {!isReadOnly && (
-                          <span
-                            className="select-none px-1 text-sm text-[var(--muted)]"
-                            title="Glisser pour déplacer"
-                            aria-hidden
-                          >
-                            ⋮⋮
-                          </span>
-                        )}
-
-                        <input
-                          type="checkbox"
-                          checked={task.done}
-                          disabled={isReadOnly}
-                          onChange={(e) =>
-                            setTasks((prev) =>
-                              prev.map((t) =>
-                                t.id === task.id
-                                  ? { ...t, done: e.target.checked }
-                                  : t,
-                              ),
-                            )
-                          }
-                          className="h-4 w-4 accent-[var(--accent)]"
-                        />
-
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            value={editingText}
-                            onChange={(e) => setEditingText(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                saveEditTask();
-                              }
-                              if (e.key === "Escape") cancelEditTask();
-                            }}
-                            className="field flex-1 py-1.5 text-sm"
-                          />
-                        ) : (
-                          <span
-                            className={`flex-1 text-sm ${
-                              task.done
-                                ? "text-[var(--muted)] line-through"
-                                : "text-[var(--text)]"
-                            }`}
-                          >
-                            {task.text}
-                          </span>
-                        )}
-
-                        {!isReadOnly && (
-                          <div className="flex flex-wrap items-center gap-1">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={saveEditTask}
-                                  className="rounded-lg px-2 py-1 text-sm font-semibold text-[var(--accent-strong)] hover:bg-teal-50"
-                                >
-                                  OK
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={cancelEditTask}
-                                  className="rounded-lg px-2 py-1 text-sm text-[var(--muted)] hover:bg-slate-100"
-                                >
-                                  Annuler
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  title="Monter"
-                                  disabled={index === 0}
-                                  onClick={() => moveTask(index, index - 1)}
-                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white disabled:opacity-30"
-                                >
-                                  ▲
-                                </button>
-                                <button
-                                  type="button"
-                                  title="Descendre"
-                                  disabled={index === tasks.length - 1}
-                                  onClick={() => moveTask(index, index + 1)}
-                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white disabled:opacity-30"
-                                >
-                                  ▼
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => startEditTask(task)}
-                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white"
-                                >
-                                  Modifier
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteTask(task.id)}
-                                  className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
-                                >
-                                  Supprimer
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="mt-4 space-y-5">
+                  <TaskGroup
+                    title="Tâches compte administrateur"
+                    hint="À réaliser connecté en administrateur"
+                    accent="admin"
+                    tasks={adminTasks}
+                    isReadOnly={isReadOnly}
+                    editingTaskId={editingTaskId}
+                    editingText={editingText}
+                    editingAccount={editingAccount}
+                    dragTaskId={dragTaskId}
+                    dragOverTaskId={dragOverTaskId}
+                    onEditingText={setEditingText}
+                    onEditingAccount={setEditingAccount}
+                    onToggleDone={(id, done) =>
+                      setTasks((prev) =>
+                        prev.map((t) => (t.id === id ? { ...t, done } : t)),
+                      )
+                    }
+                    onDragStart={onTaskDragStart}
+                    onDragOver={onTaskDragOver}
+                    onDrop={onTaskDrop}
+                    onDragEnd={onTaskDragEnd}
+                    onMove={(from, to) => moveTaskInAccount("admin", from, to)}
+                    onStartEdit={startEditTask}
+                    onSaveEdit={saveEditTask}
+                    onCancelEdit={cancelEditTask}
+                    onDelete={deleteTask}
+                    onSetAccount={setTaskAccount}
+                    onClearGroup={() => clearTasksByAccount("admin")}
+                  />
+                  <TaskGroup
+                    title="Tâches compte utilisateur"
+                    hint="À réaliser connecté en utilisateur normal"
+                    accent="user"
+                    tasks={userTasks}
+                    isReadOnly={isReadOnly}
+                    editingTaskId={editingTaskId}
+                    editingText={editingText}
+                    editingAccount={editingAccount}
+                    dragTaskId={dragTaskId}
+                    dragOverTaskId={dragOverTaskId}
+                    onEditingText={setEditingText}
+                    onEditingAccount={setEditingAccount}
+                    onToggleDone={(id, done) =>
+                      setTasks((prev) =>
+                        prev.map((t) => (t.id === id ? { ...t, done } : t)),
+                      )
+                    }
+                    onDragStart={onTaskDragStart}
+                    onDragOver={onTaskDragOver}
+                    onDrop={onTaskDrop}
+                    onDragEnd={onTaskDragEnd}
+                    onMove={(from, to) => moveTaskInAccount("user", from, to)}
+                    onStartEdit={startEditTask}
+                    onSaveEdit={saveEditTask}
+                    onCancelEdit={cancelEditTask}
+                    onDelete={deleteTask}
+                    onSetAccount={setTaskAccount}
+                    onClearGroup={() => clearTasksByAccount("user")}
+                  />
+                </div>
+              )}
             </Card>
 
             {status && (
@@ -898,6 +970,261 @@ export default function AppShell() {
   );
 }
 
+function TaskGroup({
+  title,
+  hint,
+  accent,
+  tasks,
+  isReadOnly,
+  editingTaskId,
+  editingText,
+  editingAccount,
+  dragTaskId,
+  dragOverTaskId,
+  onEditingText,
+  onEditingAccount,
+  onToggleDone,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onMove,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onDelete,
+  onSetAccount,
+  onClearGroup,
+}: {
+  title: string;
+  hint: string;
+  accent: TaskAccount;
+  tasks: EditorTask[];
+  isReadOnly: boolean;
+  editingTaskId: string | null;
+  editingText: string;
+  editingAccount: TaskAccount;
+  dragTaskId: string | null;
+  dragOverTaskId: string | null;
+  onEditingText: (value: string) => void;
+  onEditingAccount: (value: TaskAccount) => void;
+  onToggleDone: (id: string, done: boolean) => void;
+  onDragStart: (id: string) => void;
+  onDragOver: (e: DragEvent, id: string) => void;
+  onDrop: (id: string) => void;
+  onDragEnd: () => void;
+  onMove: (from: number, to: number) => void;
+  onStartEdit: (task: EditorTask) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onDelete: (id: string) => void;
+  onSetAccount: (id: string, account: TaskAccount) => void;
+  onClearGroup: () => void;
+}) {
+  const badge =
+    accent === "admin"
+      ? "bg-amber-50 text-amber-800"
+      : "bg-sky-50 text-sky-800";
+  const borderAccent =
+    accent === "admin" ? "border-amber-200" : "border-sky-200";
+
+  return (
+    <div className={`rounded-xl border ${borderAccent} bg-[#f8fafc] p-3`}>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-semibold text-[var(--text)]">{title}</h3>
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge}`}
+            >
+              {tasks.filter((t) => t.done).length}/{tasks.length}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--muted)]">{hint}</p>
+        </div>
+        {!isReadOnly && tasks.length > 0 && (
+          <button
+            type="button"
+            onClick={onClearGroup}
+            className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
+          >
+            Vider
+          </button>
+        )}
+      </div>
+
+      {tasks.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-[var(--line)] bg-white px-3 py-5 text-center text-sm text-[var(--muted)]">
+          Aucune tâche dans cette liste.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {tasks.map((task, index) => {
+            const isEditing = editingTaskId === task.id;
+            const isDragging = dragTaskId === task.id;
+            const isDropTarget = dragOverTaskId === task.id;
+
+            return (
+              <div
+                key={task.id}
+                draggable={!isReadOnly && !isEditing}
+                onDragStart={() => onDragStart(task.id)}
+                onDragOver={(e) => onDragOver(e, task.id)}
+                onDrop={() => onDrop(task.id)}
+                onDragEnd={onDragEnd}
+                className={`flex flex-wrap items-center gap-2 rounded-xl border bg-white px-3 py-2 transition ${
+                  isDropTarget
+                    ? "border-[var(--accent)] ring-2 ring-teal-200"
+                    : "border-[var(--line)]"
+                } ${isDragging ? "opacity-50" : ""} ${
+                  !isReadOnly && !isEditing
+                    ? "cursor-grab active:cursor-grabbing"
+                    : ""
+                }`}
+              >
+                {!isReadOnly && (
+                  <span
+                    className="select-none px-1 text-sm text-[var(--muted)]"
+                    title="Glisser pour déplacer"
+                    aria-hidden
+                  >
+                    ⋮⋮
+                  </span>
+                )}
+
+                <input
+                  type="checkbox"
+                  checked={task.done}
+                  disabled={isReadOnly}
+                  onChange={(e) => onToggleDone(task.id, e.target.checked)}
+                  className="h-4 w-4 accent-[var(--accent)]"
+                />
+
+                {isEditing ? (
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                    <input
+                      autoFocus
+                      value={editingText}
+                      onChange={(e) => onEditingText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          onSaveEdit();
+                        }
+                        if (e.key === "Escape") onCancelEdit();
+                      }}
+                      className="field min-w-40 flex-1 py-1.5 text-sm"
+                    />
+                    <select
+                      value={editingAccount}
+                      onChange={(e) =>
+                        onEditingAccount(e.target.value as TaskAccount)
+                      }
+                      className="field w-auto py-1.5 text-sm"
+                    >
+                      <option value="admin">Administrateur</option>
+                      <option value="user">Utilisateur</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="min-w-0 flex-1">
+                    <span
+                      className={`block text-sm ${
+                        task.done
+                          ? "text-[var(--muted)] line-through"
+                          : "text-[var(--text)]"
+                      }`}
+                    >
+                      {task.text}
+                    </span>
+                    <span
+                      className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge}`}
+                    >
+                      {accountLabel(task.account)}
+                    </span>
+                  </div>
+                )}
+
+                {!isReadOnly && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    {isEditing ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={onSaveEdit}
+                          className="rounded-lg px-2 py-1 text-sm font-semibold text-[var(--accent-strong)] hover:bg-teal-50"
+                        >
+                          OK
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onCancelEdit}
+                          className="rounded-lg px-2 py-1 text-sm text-[var(--muted)] hover:bg-slate-100"
+                        >
+                          Annuler
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          title="Monter"
+                          disabled={index === 0}
+                          onClick={() => onMove(index, index - 1)}
+                          className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-[#f4f7fb] disabled:opacity-30"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          title="Descendre"
+                          disabled={index === tasks.length - 1}
+                          onClick={() => onMove(index, index + 1)}
+                          className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-[#f4f7fb] disabled:opacity-30"
+                        >
+                          ▼
+                        </button>
+                        <select
+                          value={task.account}
+                          title="Changer de compte"
+                          onChange={(e) =>
+                            onSetAccount(
+                              task.id,
+                              e.target.value as TaskAccount,
+                            )
+                          }
+                          className="rounded-lg border border-[var(--line)] bg-[#f4f7fb] px-2 py-1 text-xs"
+                        >
+                          <option value="admin">Admin</option>
+                          <option value="user">Utilisateur</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => onStartEdit(task)}
+                          className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-[#f4f7fb]"
+                        >
+                          Modifier
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDelete(task.id)}
+                          className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
+                        >
+                          Supprimer
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-white p-5 shadow-sm">
@@ -948,6 +1275,8 @@ function FicheRow({
   showEnd?: boolean;
 }) {
   const done = fiche.tasks.filter((t) => t.done).length;
+  const admin = fiche.tasks.filter((t) => t.account === "admin");
+  const user = fiche.tasks.filter((t) => t.account !== "admin");
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-[var(--line)] bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
       <div>
@@ -959,8 +1288,16 @@ function FicheRow({
           Début : {formatDate(fiche.startDate)}
           {showEnd ? ` · Fin : ${formatDate(fiche.endDate)}` : ""}
         </div>
-        <div className="mt-3 inline-flex rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
-          {done} / {fiche.tasks.length} tâches
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+            Admin {admin.filter((t) => t.done).length}/{admin.length}
+          </span>
+          <span className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800">
+            Utilisateur {user.filter((t) => t.done).length}/{user.length}
+          </span>
+          <span className="inline-flex rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
+            Total {done}/{fiche.tasks.length}
+          </span>
         </div>
       </div>
       <div className="flex flex-wrap gap-2">{actions}</div>
