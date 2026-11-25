@@ -1,84 +1,37 @@
-"use client";
-
 import {
-  DragEvent,
-  FormEvent,
+  type DragEvent,
+  type FormEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import { downloadPdf, printPdf } from "./pdf";
-import type { PcTodoFiche, TaskAccount, TaskItem } from "@shared/types";
+import type {
+  AppRole,
+  PcTodoFiche,
+  PublicUser,
+  TaskAccount,
+  TaskItem,
+  UserInput,
+} from "@shared/types";
 
-type View = "editor" | "drafts" | "history";
+type View = "editor" | "drafts" | "history" | "users";
+type EditorMode = "new" | "draft" | "finalized";
 
 type EditorTask = TaskItem;
 
 const emptyTasks: EditorTask[] = [];
 
-function accountLabel(account: TaskAccount) {
-  return account === "admin" ? "Administrateur" : "Utilisateur";
+const fetchOpts: RequestInit = { credentials: "include" };
+
+function roleLabel(role: AppRole) {
+  return role === "admin" ? "Administrateur" : "Lecteur";
 }
 
-function AccountPicker({
-  value,
-  onChange,
-  disabled = false,
-  label = "Cette tâche se fera sur le compte",
-}: {
-  value: TaskAccount;
-  onChange: (value: TaskAccount) => void;
-  disabled?: boolean;
-  label?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[#f4f7fb] p-3">
-      <div className="text-sm font-semibold text-[var(--text)]">{label}</div>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange("admin")}
-          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
-            value === "admin"
-              ? "border-amber-500 bg-amber-50 ring-2 ring-amber-200"
-              : "border-[var(--line)] bg-white hover:border-amber-300"
-          }`}
-        >
-          <div className="text-sm font-bold text-amber-900">Administrateur</div>
-          <div className="mt-0.5 text-xs text-[var(--muted)]">
-            Connexion en compte admin
-          </div>
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange("user")}
-          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
-            value === "user"
-              ? "border-sky-500 bg-sky-50 ring-2 ring-sky-200"
-              : "border-[var(--line)] bg-white hover:border-sky-300"
-          }`}
-        >
-          <div className="text-sm font-bold text-sky-900">Utilisateur</div>
-          <div className="mt-0.5 text-xs text-[var(--muted)]">
-            Connexion en compte normal
-          </div>
-        </button>
-      </div>
-      <p className="mt-2 text-xs font-medium text-[var(--muted)]">
-        Sélection actuelle :{" "}
-        <span
-          className={
-            value === "admin" ? "text-amber-800" : "text-sky-800"
-          }
-        >
-          {accountLabel(value)}
-        </span>
-      </p>
-    </div>
-  );
+function accountLabel(account: TaskAccount) {
+  return account === "admin" ? "Administrateur" : "Utilisateur";
 }
 
 function normalizeAccount(value: TaskAccount | string | undefined): TaskAccount {
@@ -105,8 +58,174 @@ function formatDate(value: string | null) {
   return `${d}/${m}/${y}`;
 }
 
-export default function AppShell() {
-  const [view, setView] = useState<View>("editor");
+async function parseJsonError(res: Response): Promise<string> {
+  const data = await res.json().catch(() => null);
+  if (data && typeof data === "object" && "error" in data) {
+    return String((data as { error?: string }).error);
+  }
+  return `Erreur API (${res.status})`;
+}
+
+export default function App() {
+  const [user, setUser] = useState<PublicUser | null>(null);
+  const [authSettled, setAuthSettled] = useState(false);
+
+  const checkSession = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me", fetchOpts);
+      if (res.ok) {
+        const data = (await res.json()) as { user: PublicUser };
+        setUser(data.user);
+      } else {
+        setUser(null);
+      }
+    } catch {
+      setUser(null);
+    } finally {
+      setAuthSettled(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkSession();
+  }, [checkSession]);
+
+  async function handleLogin(username: string, password: string) {
+    const res = await fetch("/api/auth/login", {
+      ...fetchOpts,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const message = await parseJsonError(res);
+      throw new Error(message);
+    }
+    const data = (await res.json()) as { user: PublicUser };
+    setUser(data.user);
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { ...fetchOpts, method: "POST" });
+    setUser(null);
+  }
+
+  if (user) {
+    return <AppShell user={user} onLogout={() => void handleLogout()} />;
+  }
+
+  return (
+    <LoginScreen
+      onLogin={handleLogin}
+      settling={!authSettled}
+    />
+  );
+}
+
+function LoginScreen({
+  onLogin,
+  settling,
+}: {
+  onLogin: (username: string, password: string) => Promise<void>;
+  settling: boolean;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onLogin(username.trim(), password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Connexion impossible.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid min-h-screen place-items-center px-4 py-10 anim-fade">
+      <div className="panel w-full max-w-lg p-8 anim-rise">
+        <div className="flex items-center gap-4">
+          <div className="brand-mark text-lg">PC</div>
+          <div>
+            <h1 className="font-display text-4xl font-extrabold tracking-tight text-[var(--text)]">
+              AUBM PCheck
+            </h1>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Préparation et contrôle des Todo PC
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-8 text-lg font-semibold text-[var(--text)]">
+          Connectez-vous pour accéder aux fiches.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
+          Les brouillons et l&apos;historique sont centralisés sur le serveur
+          AUBM. Identifiez-vous avec votre compte applicatif.
+        </p>
+
+        <form onSubmit={submit} className="mt-8 space-y-4">
+          <label className="block text-xs font-semibold text-[var(--muted)]">
+            Identifiant
+            <input
+              autoComplete="username"
+              value={username}
+              disabled={busy}
+              onChange={(e) => setUsername(e.target.value)}
+              className="field mt-2"
+              placeholder="nom.utilisateur"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-[var(--muted)]">
+            Mot de passe
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              disabled={busy}
+              onChange={(e) => setPassword(e.target.value)}
+              className="field mt-2"
+              placeholder="••••••••"
+            />
+          </label>
+
+          {error && (
+            <p className="text-sm font-semibold text-[var(--danger)]">{error}</p>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy || settling}
+            className="w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
+          >
+            {busy
+              ? "Connexion…"
+              : settling
+                ? "Vérification de session…"
+                : "Se connecter"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AppShell({
+  user,
+  onLogout,
+}: {
+  user: PublicUser;
+  onLogout: () => void;
+}) {
+  const isAppAdmin = user.role === "admin";
+
+  const [view, setView] = useState<View>(isAppAdmin ? "editor" : "drafts");
   const [drafts, setDrafts] = useState<PcTodoFiche[]>([]);
   const [history, setHistory] = useState<PcTodoFiche[]>([]);
   const [syncing, setSyncing] = useState(true);
@@ -116,7 +235,7 @@ export default function AppShell() {
   const [finalizeOpen, setFinalizeOpen] = useState(false);
 
   const [currentId, setCurrentId] = useState<string | null>(null);
-  const [isReadOnly, setIsReadOnly] = useState(false);
+  const [editorMode, setEditorMode] = useState<EditorMode>("new");
   const [editorTitle, setEditorTitle] = useState("Nouvelle fiche Todo PC");
   const [version, setVersion] = useState("");
   const [owner, setOwner] = useState("");
@@ -133,6 +252,18 @@ export default function AppShell() {
   const [editingAccount, setEditingAccount] = useState<TaskAccount>("user");
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
+
+  const [users, setUsers] = useState<PublicUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userForm, setUserForm] = useState<UserInput>({
+    username: "",
+    displayName: "",
+    password: "",
+    role: "reader",
+  });
+
+  const isReadOnly =
+    user.role === "reader" || editorMode === "finalized";
 
   const adminTasks = useMemo(
     () => tasks.filter((t) => t.account === "admin"),
@@ -164,7 +295,7 @@ export default function AppShell() {
       return data as PcTodoFiche[];
     };
 
-    const opts: RequestInit = { signal };
+    const opts: RequestInit = { ...fetchOpts, signal };
     const [d, h] = await Promise.all([
       fetch("/api/fiches?status=draft", opts).then(parseList),
       fetch("/api/fiches?status=finalized", opts).then(parseList),
@@ -184,7 +315,7 @@ export default function AppShell() {
     } catch (err) {
       const message =
         err instanceof DOMException && err.name === "AbortError"
-          ? "Délai dépassé : l’API ne répond pas (vérifiez MySQL / systemctl)."
+          ? "Délai dépassé : l’API ne répond pas."
           : err instanceof Error
             ? err.message
             : "Impossible de charger les fiches.";
@@ -199,6 +330,29 @@ export default function AppShell() {
     void boot();
   }, [boot]);
 
+  const loadUsers = useCallback(async () => {
+    if (!isAppAdmin) return;
+    setUsersLoading(true);
+    try {
+      const res = await fetch("/api/users", fetchOpts);
+      if (!res.ok) {
+        throw new Error(await parseJsonError(res));
+      }
+      const list = (await res.json()) as PublicUser[];
+      setUsers(list);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Erreur utilisateurs.");
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [isAppAdmin, toast]);
+
+  useEffect(() => {
+    if (view === "users" && isAppAdmin) {
+      void loadUsers();
+    }
+  }, [view, isAppAdmin, loadUsers]);
+
   const filteredHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     if (!q) return history;
@@ -208,8 +362,9 @@ export default function AppShell() {
   }, [history, historySearch]);
 
   function resetEditor() {
+    if (!isAppAdmin) return;
     setCurrentId(null);
-    setIsReadOnly(false);
+    setEditorMode("new");
     setEditorTitle("Nouvelle fiche Todo PC");
     setVersion("");
     setOwner("");
@@ -229,9 +384,9 @@ export default function AppShell() {
     setView("editor");
   }
 
-  function fillEditor(fiche: PcTodoFiche, readOnly: boolean) {
+  function fillEditor(fiche: PcTodoFiche, mode: EditorMode) {
     setCurrentId(fiche.id);
-    setIsReadOnly(readOnly);
+    setEditorMode(mode);
     setVersion(fiche.version);
     setOwner(fiche.owner);
     setPcName(fiche.pcName);
@@ -251,7 +406,7 @@ export default function AppShell() {
     setView("editor");
   }
 
-  function collect(status: "draft" | "finalized") {
+  function collect(ficheStatus: "draft" | "finalized") {
     const ordered = sortTasksByAccount(tasks);
     return {
       id: currentId || undefined,
@@ -259,9 +414,9 @@ export default function AppShell() {
       owner: owner.trim(),
       pcName: pcName.trim(),
       startDate,
-      endDate: status === "finalized" ? endDate : null,
-      status,
-      finalizedAt: status === "finalized" ? new Date().toISOString() : null,
+      endDate: ficheStatus === "finalized" ? endDate : null,
+      status: ficheStatus,
+      finalizedAt: ficheStatus === "finalized" ? new Date().toISOString() : null,
       tasks: ordered.map((t) => ({
         id: t.id,
         text: t.text,
@@ -416,13 +571,7 @@ export default function AppShell() {
   function clearTasksByAccount(account: TaskAccount) {
     if (isReadOnly) return;
     const label = accountLabel(account).toLowerCase();
-    if (
-      !window.confirm(
-        `Supprimer toutes les tâches ${label} ?`,
-      )
-    ) {
-      return;
-    }
+    if (!window.confirm(`Supprimer toutes les tâches ${label} ?`)) return;
     setTasks((prev) =>
       sortTasksByAccount(prev.filter((t) => t.account !== account)),
     );
@@ -461,8 +610,8 @@ export default function AppShell() {
       const [item] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, item);
       const admin = account === "admin" ? next : other;
-      const user = account === "user" ? next : other;
-      return sortTasksByAccount([...admin, ...user]);
+      const userList = account === "user" ? next : other;
+      return sortTasksByAccount([...admin, ...userList]);
     });
   }
 
@@ -509,6 +658,7 @@ export default function AppShell() {
   async function saveDraft() {
     if (isReadOnly || !validate()) return;
     const res = await fetch("/api/fiches", {
+      ...fetchOpts,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collect("draft")),
@@ -519,13 +669,14 @@ export default function AppShell() {
       return;
     }
     setCurrentId(fiche.id);
+    setEditorMode("draft");
     setEditorTitle(`Brouillon — ${fiche.pcName}`);
     await refresh();
     toast("Brouillon enregistré.");
   }
 
   async function confirmFinalize() {
-    if (!validate()) return;
+    if (isReadOnly || !validate()) return;
     if (!endDate) {
       toast("Indiquez la date de fin de préparation.");
       return;
@@ -535,6 +686,7 @@ export default function AppShell() {
       return;
     }
     const res = await fetch("/api/fiches", {
+      ...fetchOpts,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collect("finalized")),
@@ -552,16 +704,58 @@ export default function AppShell() {
   }
 
   async function removeFiche(id: string, kind: "draft" | "history") {
+    if (!isAppAdmin) return;
     const ok = window.confirm(
       kind === "draft"
         ? "Supprimer ce brouillon ?"
         : "Retirer cette fiche de l’historique ?",
     );
     if (!ok) return;
-    await fetch(`/api/fiches/${id}`, { method: "DELETE" });
-    if (currentId === id) resetEditor();
+    await fetch(`/api/fiches/${id}`, { ...fetchOpts, method: "DELETE" });
+    if (currentId === id) {
+      if (isAppAdmin) resetEditor();
+      else setView("drafts");
+    }
     await refresh();
     toast(kind === "draft" ? "Brouillon supprimé." : "Fiche retirée.");
+  }
+
+  async function createAppUser(e: FormEvent) {
+    e.preventDefault();
+    if (!isAppAdmin) return;
+    const res = await fetch("/api/users", {
+      ...fetchOpts,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(userForm),
+    });
+    if (!res.ok) {
+      toast(await parseJsonError(res));
+      return;
+    }
+    setUserForm({
+      username: "",
+      displayName: "",
+      password: "",
+      role: "reader",
+    });
+    await loadUsers();
+    toast("Utilisateur créé.");
+  }
+
+  async function deleteAppUser(id: string) {
+    if (!isAppAdmin || id === user.id) return;
+    if (!window.confirm("Supprimer cet utilisateur ?")) return;
+    const res = await fetch(`/api/users/${id}`, {
+      ...fetchOpts,
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      toast(await parseJsonError(res));
+      return;
+    }
+    await loadUsers();
+    toast("Utilisateur supprimé.");
   }
 
   function currentAsFiche(): PcTodoFiche {
@@ -571,8 +765,8 @@ export default function AppShell() {
       owner: owner.trim(),
       pcName: pcName.trim(),
       startDate,
-      endDate: null,
-      status: "draft",
+      endDate: editorMode === "finalized" ? endDate : null,
+      status: editorMode === "finalized" ? "finalized" : "draft",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       finalizedAt: null,
@@ -580,56 +774,81 @@ export default function AppShell() {
     };
   }
 
+  const navItems: Array<{
+    key: View;
+    label: string;
+    count: number | null;
+    adminOnly?: boolean;
+  }> = [
+    { key: "editor", label: "Nouvelle fiche", count: null, adminOnly: true },
+    { key: "drafts", label: "Brouillons", count: drafts.length },
+    { key: "history", label: "Historique", count: history.length },
+    { key: "users", label: "Utilisateurs", count: null, adminOnly: true },
+  ];
+
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[268px_1fr]">
-      <aside className="bg-[var(--sidebar)] px-5 py-7 text-white">
-        <div className="mb-9 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-teal-400 to-teal-700 text-sm font-bold">
-            PC
-          </div>
+    <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
+      <aside className="flex flex-col bg-[var(--sidebar)] px-5 py-7 text-white">
+        <div className="mb-8 flex items-center gap-3 anim-rise">
+          <div className="brand-mark text-sm">PC</div>
           <div>
-            <div className="text-lg font-bold">AUBM PCheck</div>
-            <div className="text-xs text-slate-300">MySQL · :8091</div>
+            <div className="font-display text-xl font-extrabold">AUBM PCheck</div>
+            <div className="text-xs text-slate-300">Todo PC · contrôle</div>
           </div>
         </div>
 
         <nav className="space-y-2">
-          {(
-            [
-              ["editor", "Nouvelle fiche", null],
-              ["drafts", "Brouillons", drafts.length],
-              ["history", "Historique", history.length],
-            ] as const
-          ).map(([key, label, count]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setView(key)}
-              className={`flex w-full items-center justify-between rounded-xl px-3.5 py-3 text-left text-sm font-semibold transition ${
-                view === key
-                  ? "bg-teal-400/20 text-white"
-                  : "text-slate-300 hover:bg-white/10 hover:text-white"
-              }`}
-            >
-              <span>{label}</span>
-              {count !== null && (
-                <span className="min-w-6 rounded-full bg-white/10 px-2 py-0.5 text-center text-xs">
-                  {count}
-                </span>
-              )}
-            </button>
-          ))}
+          {navItems
+            .filter((item) => !item.adminOnly || isAppAdmin)
+            .map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => {
+                  if (item.key === "editor" && isAppAdmin) resetEditor();
+                  else setView(item.key);
+                }}
+                className={`flex w-full items-center justify-between rounded-xl px-3.5 py-3 text-left text-sm font-semibold transition ${
+                  view === item.key
+                    ? "bg-[var(--accent)]/25 text-white"
+                    : "text-slate-300 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <span>{item.label}</span>
+                {item.count !== null && (
+                  <span className="min-w-6 rounded-md bg-white/10 px-2 py-0.5 text-center text-xs">
+                    {item.count}
+                  </span>
+                )}
+              </button>
+            ))}
         </nav>
 
-        <div className="mt-8 rounded-xl bg-white/10 p-3.5 text-xs leading-relaxed text-slate-300 lg:mt-auto">
+        <div className="mt-8 rounded-xl border border-white/10 bg-[var(--sidebar-2)] p-4 text-sm">
+          <div className="font-semibold text-white">
+            {user.displayName || user.username}
+          </div>
+          <div className="mt-1 text-xs text-slate-300">
+            {user.username} · {roleLabel(user.role)}
+          </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="mt-4 w-full rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+          >
+            Se déconnecter
+          </button>
+        </div>
+
+        <div className="mt-6 hidden text-xs leading-relaxed text-slate-400 lg:mt-auto lg:block">
           Préparez · cochez · finalisez
           <br />
-          Puis exportez en PDF ou imprimez.
+          Export PDF ou impression.
         </div>
       </aside>
 
-      <main className="px-5 py-6 sm:px-8">
-        {(syncing || loadError) && (
+      <main className="px-5 py-6 sm:px-8 anim-fade">
+        {(syncing || loadError) && view !== "users" && (
           <div
             className={`mx-auto mb-4 max-w-5xl rounded-xl border px-4 py-3 text-sm ${
               loadError
@@ -653,24 +872,28 @@ export default function AppShell() {
             )}
           </div>
         )}
+
         {view === "editor" && (
-          <section className="mx-auto max-w-5xl space-y-5">
+          <section className="mx-auto max-w-5xl space-y-5 anim-rise">
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] pb-5">
               <div>
-                <h1 className="text-3xl font-bold text-[var(--text)]">
+                <h1 className="font-display text-3xl font-bold text-[var(--text)]">
                   {editorTitle}
                 </h1>
                 <p className="mt-2 text-[var(--muted)]">
-                  Renseignez le PC, ajoutez les tâches, puis cochez-les au fur et
-                  à mesure.
+                  {isReadOnly
+                    ? "Consultation seule — export PDF ou impression disponibles."
+                    : "Renseignez le PC, ajoutez les tâches, puis cochez-les au fur et à mesure."}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Btn ghost onClick={resetEditor}>
-                  Nouvelle
-                </Btn>
-                {!isReadOnly && (
-                  <Btn onClick={saveDraft}>Enregistrer brouillon</Btn>
+                {isAppAdmin && editorMode === "new" && (
+                  <Btn ghost onClick={resetEditor}>
+                    Nouvelle
+                  </Btn>
+                )}
+                {isAppAdmin && !isReadOnly && (
+                  <Btn onClick={() => void saveDraft()}>Enregistrer brouillon</Btn>
                 )}
                 <Btn
                   onClick={() => {
@@ -688,7 +911,7 @@ export default function AppShell() {
                 >
                   Exporter PDF
                 </Btn>
-                {!isReadOnly && (
+                {isAppAdmin && !isReadOnly && (
                   <Btn
                     primary
                     onClick={() => {
@@ -703,7 +926,7 @@ export default function AppShell() {
               </div>
             </div>
 
-            <Card>
+            <div className="panel p-5">
               <SectionTitle>Informations du PC</SectionTitle>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <Field label="Version du Todo PC">
@@ -743,101 +966,105 @@ export default function AppShell() {
                   />
                 </Field>
               </div>
-            </Card>
+            </div>
 
-            <Card>
+            <div className="panel p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <SectionTitle>Tâches à faire</SectionTitle>
                 <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                  <span className="rounded-md bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">
                     Admin {adminTasks.filter((t) => t.done).length}/
                     {adminTasks.length}
                   </span>
-                  <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800">
+                  <span className="rounded-md bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-900">
                     Utilisateur {userTasks.filter((t) => t.done).length}/
                     {userTasks.length}
                   </span>
-                  <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
+                  <span className="rounded-md bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
                     Total {tasks.filter((t) => t.done).length}/{tasks.length}
                   </span>
                 </div>
               </div>
 
-              <div className="mt-4 space-y-3">
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  Coller une liste (une tâche par ligne)
-                </div>
-                <AccountPicker
-                  value={pasteAccount}
-                  disabled={isReadOnly}
-                  onChange={setPasteAccount}
-                  label="Ces tâches collées se feront sur le compte"
-                />
-                <textarea
-                  value={pasteBlock}
-                  disabled={isReadOnly}
-                  onChange={(e) => setPasteBlock(e.target.value)}
-                  rows={5}
-                  placeholder={
-                    pasteAccount === "admin"
-                      ? "Exemple (admin) :\nInstaller Windows 11\nConfigurer le domaine\nInstaller les drivers"
-                      : "Exemple (utilisateur) :\nConfigurer le bureau\nInstaller Office\nTester l’imprimante"
-                  }
-                  className="field min-h-28 resize-y"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Btn
-                    primary
-                    disabled={isReadOnly}
-                    onClick={() => importFromPaste("append")}
-                  >
-                    Importer en {accountLabel(pasteAccount)}
-                  </Btn>
-                  <Btn
-                    disabled={isReadOnly}
-                    onClick={() => importFromPaste("replace")}
-                  >
-                    Remplacer toute la liste
-                  </Btn>
-                </div>
-                <p className="text-xs text-[var(--muted)]">
-                  Accepte aussi les puces (-, •), numéros (1.) et cases [ ].
-                </p>
-              </div>
+              {!isReadOnly && (
+                <>
+                  <div className="mt-4 space-y-3">
+                    <div className="text-sm font-semibold text-[var(--text)]">
+                      Coller une liste (une tâche par ligne)
+                    </div>
+                    <AccountPicker
+                      value={pasteAccount}
+                      disabled={isReadOnly}
+                      onChange={setPasteAccount}
+                      label="Ces tâches collées se feront sur le compte"
+                    />
+                    <textarea
+                      value={pasteBlock}
+                      disabled={isReadOnly}
+                      onChange={(e) => setPasteBlock(e.target.value)}
+                      rows={5}
+                      placeholder={
+                        pasteAccount === "admin"
+                          ? "Exemple (admin) :\nInstaller Windows 11\nConfigurer le domaine\nInstaller les drivers"
+                          : "Exemple (utilisateur) :\nConfigurer le bureau\nInstaller Office\nTester l’imprimante"
+                      }
+                      className="field min-h-28 resize-y"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Btn
+                        primary
+                        disabled={isReadOnly}
+                        onClick={() => importFromPaste("append")}
+                      >
+                        Importer en {accountLabel(pasteAccount)}
+                      </Btn>
+                      <Btn
+                        disabled={isReadOnly}
+                        onClick={() => importFromPaste("replace")}
+                      >
+                        Remplacer toute la liste
+                      </Btn>
+                    </div>
+                    <p className="text-xs text-[var(--muted)]">
+                      Accepte aussi les puces (-, •), numéros (1.) et cases [ ].
+                    </p>
+                  </div>
 
-              <div className="my-4 border-t border-[var(--line)]" />
+                  <div className="my-4 border-t border-[var(--line)]" />
 
-              <div className="space-y-3">
-                <div className="text-sm font-semibold text-[var(--text)]">
-                  Ajout manuel
-                </div>
-                <AccountPicker
-                  value={newTaskAccount}
-                  disabled={isReadOnly}
-                  onChange={setNewTaskAccount}
-                  label="Cette tâche se fera sur le compte"
-                />
-                <form
-                  onSubmit={addTask}
-                  className="flex flex-wrap items-center gap-2"
-                >
-                  <input
-                    value={newTask}
-                    disabled={isReadOnly}
-                    onChange={(e) => setNewTask(e.target.value)}
-                    placeholder={`Tâche ${accountLabel(newTaskAccount).toLowerCase()}…`}
-                    className="field min-w-48 flex-1"
-                  />
-                  <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
-                    Ajouter en {accountLabel(newTaskAccount)}
-                  </Btn>
-                </form>
-              </div>
+                  <div className="space-y-3">
+                    <div className="text-sm font-semibold text-[var(--text)]">
+                      Ajout manuel
+                    </div>
+                    <AccountPicker
+                      value={newTaskAccount}
+                      disabled={isReadOnly}
+                      onChange={setNewTaskAccount}
+                      label="Cette tâche se fera sur le compte"
+                    />
+                    <form
+                      onSubmit={addTask}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <input
+                        value={newTask}
+                        disabled={isReadOnly}
+                        onChange={(e) => setNewTask(e.target.value)}
+                        placeholder={`Tâche ${accountLabel(newTaskAccount).toLowerCase()}…`}
+                        className="field min-w-48 flex-1"
+                      />
+                      <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
+                        Ajouter en {accountLabel(newTaskAccount)}
+                      </Btn>
+                    </form>
+                  </div>
+                </>
+              )}
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--muted)]">
-                  Les listes sont séparées par compte. Glissez ou utilisez ▲ /
-                  ▼ pour réordonner dans une même liste.
+                  Les listes sont séparées par compte Windows. Glissez ou
+                  utilisez les flèches pour réordonner dans une même liste.
                 </p>
                 {!isReadOnly && tasks.length > 0 && (
                   <button
@@ -854,15 +1081,16 @@ export default function AppShell() {
                 <div className="mt-3 rounded-xl border border-dashed border-[var(--line)] bg-[#f4f7fb] px-4 py-8 text-center">
                   <div className="font-semibold">Aucune tâche pour l’instant</div>
                   <div className="mt-1 text-sm text-[var(--muted)]">
-                    Collez une liste ou ajoutez une tâche en précisant le
-                    compte (admin / utilisateur).
+                    {isReadOnly
+                      ? "Cette fiche ne contient aucune tâche enregistrée."
+                      : "Collez une liste ou ajoutez une tâche en précisant le compte (admin / utilisateur)."}
                   </div>
                 </div>
               ) : (
                 <div className="mt-4 space-y-5">
                   <TaskGroup
                     title="Tâches compte administrateur"
-                    hint="À réaliser connecté en administrateur"
+                    hint="À réaliser connecté en administrateur Windows"
                     accent="admin"
                     tasks={adminTasks}
                     isReadOnly={isReadOnly}
@@ -873,11 +1101,12 @@ export default function AppShell() {
                     dragOverTaskId={dragOverTaskId}
                     onEditingText={setEditingText}
                     onEditingAccount={setEditingAccount}
-                    onToggleDone={(id, done) =>
+                    onToggleDone={(id, done) => {
+                      if (isReadOnly) return;
                       setTasks((prev) =>
                         prev.map((t) => (t.id === id ? { ...t, done } : t)),
-                      )
-                    }
+                      );
+                    }}
                     onDragStart={onTaskDragStart}
                     onDragOver={onTaskDragOver}
                     onDrop={onTaskDrop}
@@ -892,7 +1121,7 @@ export default function AppShell() {
                   />
                   <TaskGroup
                     title="Tâches compte utilisateur"
-                    hint="À réaliser connecté en utilisateur normal"
+                    hint="À réaliser connecté en utilisateur Windows"
                     accent="user"
                     tasks={userTasks}
                     isReadOnly={isReadOnly}
@@ -903,11 +1132,12 @@ export default function AppShell() {
                     dragOverTaskId={dragOverTaskId}
                     onEditingText={setEditingText}
                     onEditingAccount={setEditingAccount}
-                    onToggleDone={(id, done) =>
+                    onToggleDone={(id, done) => {
+                      if (isReadOnly) return;
                       setTasks((prev) =>
                         prev.map((t) => (t.id === id ? { ...t, done } : t)),
-                      )
-                    }
+                      );
+                    }}
                     onDragStart={onTaskDragStart}
                     onDragOver={onTaskDragOver}
                     onDrop={onTaskDrop}
@@ -922,19 +1152,17 @@ export default function AppShell() {
                   />
                 </div>
               )}
-            </Card>
+            </div>
 
             {status && (
-              <p className="font-semibold text-[var(--accent-strong)]">
-                {status}
-              </p>
+              <p className="font-semibold text-[var(--accent-strong)]">{status}</p>
             )}
           </section>
         )}
 
         {view === "drafts" && (
-          <section className="mx-auto max-w-5xl">
-            <h1 className="text-3xl font-bold">Brouillons</h1>
+          <section className="mx-auto max-w-5xl anim-rise">
+            <h1 className="font-display text-3xl font-bold">Brouillons</h1>
             <p className="mt-2 text-[var(--muted)]">
               Fiches en cours de préparation, non encore finalisées.
             </p>
@@ -951,19 +1179,25 @@ export default function AppShell() {
                         <Btn
                           primary
                           onClick={() => {
-                            fillEditor(fiche, false);
-                            setEditorTitle(`Brouillon — ${fiche.pcName}`);
+                            fillEditor(fiche, isAppAdmin ? "draft" : "draft");
+                            setEditorTitle(
+                              isAppAdmin
+                                ? `Brouillon — ${fiche.pcName}`
+                                : `Consultation — ${fiche.pcName}`,
+                            );
                           }}
                         >
-                          Ouvrir
+                          {isAppAdmin ? "Ouvrir" : "Consulter"}
                         </Btn>
                         <Btn onClick={() => downloadPdf(fiche)}>PDF</Btn>
-                        <Btn
-                          danger
-                          onClick={() => removeFiche(fiche.id, "draft")}
-                        >
-                          Supprimer
-                        </Btn>
+                        {isAppAdmin && (
+                          <Btn
+                            danger
+                            onClick={() => void removeFiche(fiche.id, "draft")}
+                          >
+                            Supprimer
+                          </Btn>
+                        )}
                       </>
                     }
                   />
@@ -974,10 +1208,12 @@ export default function AppShell() {
         )}
 
         {view === "history" && (
-          <section className="mx-auto max-w-5xl">
+          <section className="mx-auto max-w-5xl anim-rise">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-bold">Historique des Todo PC</h1>
+                <h1 className="font-display text-3xl font-bold">
+                  Historique des Todo PC
+                </h1>
                 <p className="mt-2 text-[var(--muted)]">
                   Fiches finalisées avec date de fin de préparation.
                 </p>
@@ -1007,7 +1243,7 @@ export default function AppShell() {
                         <Btn
                           primary
                           onClick={() => {
-                            fillEditor(fiche, true);
+                            fillEditor(fiche, "finalized");
                             setEditorTitle(
                               `Historique — ${fiche.pcName} (terminé le ${formatDate(fiche.endDate)})`,
                             );
@@ -1017,12 +1253,14 @@ export default function AppShell() {
                         </Btn>
                         <Btn onClick={() => downloadPdf(fiche)}>PDF</Btn>
                         <Btn onClick={() => printPdf(fiche)}>Imprimer</Btn>
-                        <Btn
-                          danger
-                          onClick={() => removeFiche(fiche.id, "history")}
-                        >
-                          Supprimer
-                        </Btn>
+                        {isAppAdmin && (
+                          <Btn
+                            danger
+                            onClick={() => void removeFiche(fiche.id, "history")}
+                          >
+                            Supprimer
+                          </Btn>
+                        )}
                       </>
                     }
                   />
@@ -1031,12 +1269,130 @@ export default function AppShell() {
             </div>
           </section>
         )}
+
+        {view === "users" && isAppAdmin && (
+          <section className="mx-auto max-w-5xl space-y-6 anim-rise">
+            <div>
+              <h1 className="font-display text-3xl font-bold">Utilisateurs</h1>
+              <p className="mt-2 text-[var(--muted)]">
+                Comptes applicatifs AUBM PCheck (distincts des comptes Windows des
+                tâches).
+              </p>
+            </div>
+
+            <div className="panel p-5">
+              <SectionTitle>Créer un utilisateur</SectionTitle>
+              <form
+                onSubmit={(e) => void createAppUser(e)}
+                className="mt-4 grid gap-4 md:grid-cols-2"
+              >
+                <Field label="Identifiant (connexion)">
+                  <input
+                    required
+                    value={userForm.username}
+                    onChange={(e) =>
+                      setUserForm((f) => ({ ...f, username: e.target.value }))
+                    }
+                    className="field"
+                    autoComplete="off"
+                  />
+                </Field>
+                <Field label="Nom affiché">
+                  <input
+                    required
+                    value={userForm.displayName}
+                    onChange={(e) =>
+                      setUserForm((f) => ({
+                        ...f,
+                        displayName: e.target.value,
+                      }))
+                    }
+                    className="field"
+                  />
+                </Field>
+                <Field label="Mot de passe initial">
+                  <input
+                    required
+                    type="password"
+                    value={userForm.password}
+                    onChange={(e) =>
+                      setUserForm((f) => ({ ...f, password: e.target.value }))
+                    }
+                    className="field"
+                    autoComplete="new-password"
+                  />
+                </Field>
+                <Field label="Rôle applicatif">
+                  <select
+                    value={userForm.role}
+                    onChange={(e) =>
+                      setUserForm((f) => ({
+                        ...f,
+                        role: e.target.value as AppRole,
+                      }))
+                    }
+                    className="field"
+                  >
+                    <option value="reader">Lecteur</option>
+                    <option value="admin">Administrateur</option>
+                  </select>
+                </Field>
+                <div className="md:col-span-2">
+                  <Btn primary type="submit" disabled={usersLoading}>
+                    Créer l&apos;utilisateur
+                  </Btn>
+                </div>
+              </form>
+            </div>
+
+            <div className="space-y-3">
+              {usersLoading && users.length === 0 ? (
+                <Empty>Chargement des utilisateurs…</Empty>
+              ) : users.length === 0 ? (
+                <Empty>Aucun utilisateur enregistré.</Empty>
+              ) : (
+                users.map((u) => (
+                  <div
+                    key={u.id}
+                    className="panel flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between"
+                  >
+                    <div>
+                      <div className="text-lg font-semibold">
+                        {u.displayName}
+                      </div>
+                      <div className="mt-1 text-sm text-[var(--muted)]">
+                        {u.username} · {roleLabel(u.role)}
+                      </div>
+                      <div className="mt-1 text-xs text-[var(--muted)]">
+                        Créé le {formatDate(u.createdAt.slice(0, 10))}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      {u.id !== user.id ? (
+                        <Btn
+                          danger
+                          onClick={() => void deleteAppUser(u.id)}
+                        >
+                          Supprimer
+                        </Btn>
+                      ) : (
+                        <span className="text-xs text-[var(--muted)]">
+                          Compte actuel
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
       </main>
 
       {finalizeOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-[#0b1524]/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-[var(--line)] bg-white p-6 shadow-xl">
-            <h2 className="text-xl font-bold">Finaliser la fiche</h2>
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#0b1524]/60 p-4 anim-fade">
+          <div className="panel w-full max-w-md p-6 anim-rise">
+            <h2 className="font-display text-xl font-bold">Finaliser la fiche</h2>
             <p className="mt-2 text-sm text-[var(--muted)]">
               Indiquez la date de fin de préparation. La fiche passera dans
               l’historique.
@@ -1054,14 +1410,71 @@ export default function AppShell() {
               <Btn ghost onClick={() => setFinalizeOpen(false)}>
                 Annuler
               </Btn>
-              <Btn primary onClick={confirmFinalize}>
+              <Btn primary onClick={() => void confirmFinalize()}>
                 Confirmer la finalisation
               </Btn>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
+function AccountPicker({
+  value,
+  onChange,
+  disabled = false,
+  label = "Cette tâche se fera sur le compte",
+}: {
+  value: TaskAccount;
+  onChange: (value: TaskAccount) => void;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[#f4f7fb] p-3">
+      <div className="text-sm font-semibold text-[var(--text)]">{label}</div>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange("admin")}
+          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
+            value === "admin"
+              ? "border-amber-500 bg-amber-50 ring-2 ring-amber-200"
+              : "border-[var(--line)] bg-white hover:border-amber-300"
+          }`}
+        >
+          <div className="text-sm font-bold text-amber-900">Administrateur</div>
+          <div className="mt-0.5 text-xs text-[var(--muted)]">
+            Connexion Windows administrateur
+          </div>
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange("user")}
+          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
+            value === "user"
+              ? "border-sky-500 bg-sky-50 ring-2 ring-sky-200"
+              : "border-[var(--line)] bg-white hover:border-sky-300"
+          }`}
+        >
+          <div className="text-sm font-bold text-sky-900">Utilisateur</div>
+          <div className="mt-0.5 text-xs text-[var(--muted)]">
+            Connexion Windows utilisateur
+          </div>
+        </button>
+      </div>
+      <p className="mt-2 text-xs font-medium text-[var(--muted)]">
+        Sélection actuelle :{" "}
+        <span
+          className={value === "admin" ? "text-amber-800" : "text-sky-800"}
+        >
+          {accountLabel(value)}
+        </span>
+      </p>
     </div>
   );
 }
@@ -1119,8 +1532,8 @@ function TaskGroup({
 }) {
   const badge =
     accent === "admin"
-      ? "bg-amber-50 text-amber-800"
-      : "bg-sky-50 text-sky-800";
+      ? "bg-amber-50 text-amber-900"
+      : "bg-sky-50 text-sky-900";
   const borderAccent =
     accent === "admin" ? "border-amber-200" : "border-sky-200";
 
@@ -1131,7 +1544,7 @@ function TaskGroup({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold text-[var(--text)]">{title}</h3>
             <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge}`}
+              className={`rounded-md px-2.5 py-0.5 text-xs font-semibold ${badge}`}
             >
               {tasks.filter((t) => t.done).length}/{tasks.length}
             </span>
@@ -1170,7 +1583,7 @@ function TaskGroup({
                 onDragEnd={onDragEnd}
                 className={`flex flex-wrap items-center gap-2 rounded-xl border bg-white px-3 py-2 transition ${
                   isDropTarget
-                    ? "border-[var(--accent)] ring-2 ring-teal-200"
+                    ? "border-[var(--accent)] ring-2 ring-[var(--accent-soft)]"
                     : "border-[var(--line)]"
                 } ${isDragging ? "opacity-50" : ""} ${
                   !isReadOnly && !isEditing
@@ -1180,11 +1593,11 @@ function TaskGroup({
               >
                 {!isReadOnly && (
                   <span
-                    className="select-none px-1 text-sm text-[var(--muted)]"
+                    className="select-none px-1 font-mono text-xs text-[var(--muted)]"
                     title="Glisser pour déplacer"
                     aria-hidden
                   >
-                    ⋮⋮
+                    ::
                   </span>
                 )}
 
@@ -1234,7 +1647,7 @@ function TaskGroup({
                       {task.text}
                     </span>
                     <span
-                      className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge}`}
+                      className={`mt-1 inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${badge}`}
                     >
                       {accountLabel(task.account)}
                     </span>
@@ -1248,7 +1661,7 @@ function TaskGroup({
                         <button
                           type="button"
                           onClick={onSaveEdit}
-                          className="rounded-lg px-2 py-1 text-sm font-semibold text-[var(--accent-strong)] hover:bg-teal-50"
+                          className="rounded-lg px-2 py-1 text-sm font-semibold text-[var(--accent-strong)] hover:bg-[var(--accent-soft)]"
                         >
                           OK
                         </button>
@@ -1269,7 +1682,7 @@ function TaskGroup({
                           onClick={() => onMove(index, index - 1)}
                           className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-[#f4f7fb] disabled:opacity-30"
                         >
-                          ▲
+                          Haut
                         </button>
                         <button
                           type="button"
@@ -1278,7 +1691,7 @@ function TaskGroup({
                           onClick={() => onMove(index, index + 1)}
                           className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-[#f4f7fb] disabled:opacity-30"
                         >
-                          ▼
+                          Bas
                         </button>
                         <select
                           value={task.account}
@@ -1321,15 +1734,7 @@ function TaskGroup({
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-[var(--line)] bg-white p-5 shadow-sm">
-      {children}
-    </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
+function SectionTitle({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center gap-2.5 text-[17px] font-semibold">
       <span className="h-4.5 w-1 rounded bg-[var(--accent)]" />
@@ -1343,7 +1748,7 @@ function Field({
   children,
 }: {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <label className="block text-xs font-semibold text-[var(--muted)]">
@@ -1353,9 +1758,9 @@ function Field({
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-[var(--line)] bg-white px-4 py-10 text-center text-[var(--muted)]">
+    <div className="panel px-4 py-10 text-center text-[var(--muted)]">
       {children}
     </div>
   );
@@ -1367,14 +1772,14 @@ function FicheRow({
   showEnd = false,
 }: {
   fiche: PcTodoFiche;
-  actions: React.ReactNode;
+  actions: ReactNode;
   showEnd?: boolean;
 }) {
   const done = fiche.tasks.filter((t) => t.done).length;
   const admin = fiche.tasks.filter((t) => t.account === "admin");
-  const user = fiche.tasks.filter((t) => t.account !== "admin");
+  const userList = fiche.tasks.filter((t) => t.account !== "admin");
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-[var(--line)] bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+    <div className="panel flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
       <div>
         <div className="text-lg font-semibold">{fiche.pcName}</div>
         <div className="mt-1 text-sm text-[var(--muted)]">
@@ -1385,13 +1790,13 @@ function FicheRow({
           {showEnd ? ` · Fin : ${formatDate(fiche.endDate)}` : ""}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <span className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+          <span className="inline-flex rounded-md bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-900">
             Admin {admin.filter((t) => t.done).length}/{admin.length}
           </span>
-          <span className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800">
-            Utilisateur {user.filter((t) => t.done).length}/{user.length}
+          <span className="inline-flex rounded-md bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-900">
+            Utilisateur {userList.filter((t) => t.done).length}/{userList.length}
           </span>
-          <span className="inline-flex rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
+          <span className="inline-flex rounded-md bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent-strong)]">
             Total {done}/{fiche.tasks.length}
           </span>
         </div>
@@ -1408,13 +1813,15 @@ function Btn({
   ghost = false,
   danger = false,
   disabled = false,
+  type = "button",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   primary?: boolean;
   ghost?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  type?: "button" | "submit";
 }) {
   const base =
     "rounded-xl px-3.5 py-2.5 text-sm font-semibold transition disabled:opacity-40";
@@ -1423,11 +1830,11 @@ function Btn({
     : danger
       ? "border border-red-200 bg-red-50 text-[var(--danger)] hover:bg-red-100"
       : ghost
-        ? "border border-[var(--line)] bg-[#f4f7fb] text-[var(--text)] hover:border-teal-500"
-        : "border border-[var(--line)] bg-white text-[var(--text)] hover:border-teal-500";
+        ? "border border-[var(--line)] bg-[#f4f7fb] text-[var(--text)] hover:border-[var(--accent)]"
+        : "border border-[var(--line)] bg-white text-[var(--text)] hover:border-[var(--accent)]";
   return (
     <button
-      type="button"
+      type={type}
       disabled={disabled}
       onClick={onClick}
       className={`${base} ${style}`}
