@@ -109,7 +109,7 @@ export default function AppShell() {
   const [view, setView] = useState<View>("editor");
   const [drafts, setDrafts] = useState<PcTodoFiche[]>([]);
   const [history, setHistory] = useState<PcTodoFiche[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [status, setStatus] = useState("");
   const [historySearch, setHistorySearch] = useState("");
@@ -174,26 +174,24 @@ export default function AppShell() {
   }, []);
 
   const boot = useCallback(async () => {
-    setLoading(true);
+    setSyncing(true);
     setLoadError("");
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 10000);
+    const timer = window.setTimeout(() => controller.abort(), 8000);
     try {
       await refresh(controller.signal);
       setLoadError("");
     } catch (err) {
-      setDrafts([]);
-      setHistory([]);
       const message =
         err instanceof DOMException && err.name === "AbortError"
-          ? "Délai dépassé : l’API ne répond pas (MySQL / service)."
+          ? "Délai dépassé : l’API ne répond pas (vérifiez MySQL / systemctl)."
           : err instanceof Error
             ? err.message
             : "Impossible de charger les fiches.";
       setLoadError(message);
     } finally {
       window.clearTimeout(timer);
-      setLoading(false);
+      setSyncing(false);
     }
   }, [refresh]);
 
@@ -582,37 +580,6 @@ export default function AppShell() {
     };
   }
 
-  if (loading) {
-    return (
-      <div className="grid min-h-screen place-items-center text-[var(--muted)]">
-        Chargement…
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-[var(--bg)] p-6">
-        <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 text-center shadow-sm">
-          <h1 className="text-xl font-bold text-[var(--text)]">
-            Impossible de démarrer
-          </h1>
-          <p className="mt-3 text-sm text-[var(--danger)]">{loadError}</p>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            Vérifiez le service et MySQL, puis réessayez.
-          </p>
-          <button
-            type="button"
-            onClick={() => void boot()}
-            className="mt-5 rounded-xl bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--accent-strong)]"
-          >
-            Réessayer
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[268px_1fr]">
       <aside className="bg-[var(--sidebar)] px-5 py-7 text-white">
@@ -622,7 +589,7 @@ export default function AppShell() {
           </div>
           <div>
             <div className="text-lg font-bold">AUBM PCheck</div>
-            <div className="text-xs text-slate-300">Préparation PC</div>
+            <div className="text-xs text-slate-300">MySQL · :8091</div>
           </div>
         </div>
 
@@ -662,6 +629,30 @@ export default function AppShell() {
       </aside>
 
       <main className="px-5 py-6 sm:px-8">
+        {(syncing || loadError) && (
+          <div
+            className={`mx-auto mb-4 max-w-5xl rounded-xl border px-4 py-3 text-sm ${
+              loadError
+                ? "border-red-200 bg-red-50 text-[var(--danger)]"
+                : "border-[var(--line)] bg-white text-[var(--muted)]"
+            }`}
+          >
+            {syncing ? (
+              "Synchronisation avec le serveur…"
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>{loadError}</span>
+                <button
+                  type="button"
+                  onClick={() => void boot()}
+                  className="rounded-lg bg-white px-3 py-1.5 font-semibold text-[var(--text)] shadow-sm"
+                >
+                  Réessayer
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {view === "editor" && (
           <section className="mx-auto max-w-5xl space-y-5">
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--line)] pb-5">

@@ -20,6 +20,7 @@ app.get("/api/health", async (_req, res) => {
     res.json({
       ok: true,
       service: "aubm-pcheck",
+      build: "mysql-2026-11-25c",
       host: HOST,
       port: PORT,
       db: "mysql",
@@ -29,6 +30,7 @@ app.get("/api/health", async (_req, res) => {
   } catch (err) {
     res.status(500).json({
       ok: false,
+      build: "mysql-2026-11-25c",
       error: err instanceof Error ? err.message : "Erreur base de données",
     });
   }
@@ -130,7 +132,18 @@ app.delete("/api/fiches/:id", async (req, res) => {
 
 const publicDir = path.join(rootDir, "dist", "public");
 if (fs.existsSync(publicDir)) {
-  app.use(express.static(publicDir, { index: false }));
+  app.use(
+    express.static(publicDir, {
+      index: false,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        } else {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }),
+  );
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       next();
@@ -140,6 +153,8 @@ if (fs.existsSync(publicDir)) {
       next();
       return;
     }
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     res.sendFile(path.join(publicDir, "index.html"), (err) => {
       if (err) next(err);
     });
