@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #eef2f7;
+  --sidebar: #102033;
+  --accent: #0f766e;
+  --accent-strong: #0b5f59;
+  --accent-soft: #d9f3ef;
+  --text: #142033;
+  --muted: #5b6b7c;
+  --line: #d3dce8;
+  --danger: #c24141;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "IBM Plex Sans", system-ui, sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+input[type="date"] {
+  color-scheme: light;
+}
+
+.field {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  background: white;
+  outline: none;
+}
+
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
+}
+
+.field:disabled {
+  background: #f4f7fb;
+  color: var(--muted);
+}
