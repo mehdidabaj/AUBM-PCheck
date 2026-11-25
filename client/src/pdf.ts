@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import type { PcTodoFiche, TaskAccount, TaskItem } from "./types";
+import type { PcTodoFiche, TaskAccount, TaskItem } from "@shared/types";
 
 function formatDate(value: string | null) {
   if (!value) return "—";

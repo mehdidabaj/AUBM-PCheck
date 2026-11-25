@@ -8,8 +8,8 @@ import {
   useMemo,
   useState,
 } from "react";
-import { downloadPdf, printPdf } from "@/lib/pdf";
-import type { PcTodoFiche, TaskAccount, TaskItem } from "@/lib/types";
+import { downloadPdf, printPdf } from "./pdf";
+import type { PcTodoFiche, TaskAccount, TaskItem } from "@shared/types";
 
 type View = "editor" | "drafts" | "history";
 

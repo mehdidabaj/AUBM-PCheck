@@ -1,12 +1,12 @@
 import { randomUUID } from "crypto";
-import { getDb } from "./db";
+import { getDb } from "./db.js";
 import type {
   FicheInput,
   FicheStatus,
   PcTodoFiche,
   TaskAccount,
   TaskItem,
-} from "./types";
+} from "../shared/types.js";
 
 type FicheRow = {
   id: string;

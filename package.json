@@ -2,29 +2,36 @@
   "name": "aubm-pcheck",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "concurrently -k -n server,client -c teal,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite --config vite.config.ts",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build --config vite.config.ts",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "NODE_ENV=production node dist/server/index.js",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^13.2.0",
+    "express": "^5.1.0",
     "jspdf": "^4.2.1",
-    "next": "15.5.29",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3",
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4.1.8",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "15.5.29",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@types/express": "^5.0.2",
+    "@types/node": "^20.17.50",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.1.2",
+    "tailwindcss": "^4.1.8",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
   }
 }

@@ -1,8 +1,12 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { findProjectRoot } from "./paths.js";
 
-const dataDir = path.join(process.cwd(), "data");
+const rootDir = findProjectRoot(import.meta.url);
+const dataDir = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(rootDir, "data");
 const dbPath = path.join(dataDir, "todos.db");
 
 let db: Database.Database | null = null;

@@ -1,0 +1,21 @@
+[Unit]
+Description=AUBM PCheck (Express + SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=aubm
+Group=aubm
+WorkingDirectory=/opt/aubm-pcheck
+EnvironmentFile=-/opt/aubm-pcheck/.env
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=8091
+Environment=DATA_DIR=/opt/aubm-pcheck/data
+ExecStart=/usr/bin/node /opt/aubm-pcheck/dist/server/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
