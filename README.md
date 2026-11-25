@@ -5,7 +5,7 @@ Application web de fiches de préparation PC avec checklist, historique, export 
 ## Fonctionnalités
 
 - Version, propriétaire, nom du PC, date de début
-- Tâches : ajout, coches, suppression
+- Tâches : collage multi-lignes et/ou ajout manuel, coches, suppression
 - Brouillons + finalisation (date de fin) → historique recherchable
 - Export PDF / impression
 - Stockage **SQLite** (`data/todos.db`)

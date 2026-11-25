@@ -42,6 +42,7 @@ export default function AppShell() {
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(todayISO());
   const [newTask, setNewTask] = useState("");
+  const [pasteBlock, setPasteBlock] = useState("");
   const [tasks, setTasks] = useState<EditorTask[]>(emptyTasks);
 
   const toast = useCallback((message: string) => {
@@ -83,6 +84,7 @@ export default function AppShell() {
     setStartDate(todayISO());
     setEndDate(todayISO());
     setNewTask("");
+    setPasteBlock("");
     setTasks([]);
     setView("editor");
   }
@@ -129,6 +131,18 @@ export default function AppShell() {
     return true;
   }
 
+  function parseTaskLines(raw: string): string[] {
+    return raw
+      .split(/\r?\n|;/)
+      .map((line) =>
+        line
+          .replace(/^\s*([-*•]+|\d+[.)])\s*/u, "")
+          .replace(/^\s*\[\s*[xX ]?\s*\]\s*/u, "")
+          .trim(),
+      )
+      .filter((line) => line.length > 0);
+  }
+
   function addTask(e?: FormEvent) {
     e?.preventDefault();
     if (isReadOnly) return;
@@ -142,6 +156,51 @@ export default function AppShell() {
       { id: uid(), text, done: false, sortOrder: prev.length },
     ]);
     setNewTask("");
+  }
+
+  function importFromPaste(mode: "append" | "replace") {
+    if (isReadOnly) return;
+    const lines = parseTaskLines(pasteBlock);
+    if (!lines.length) {
+      toast("Collez une liste de tâches (une par ligne).");
+      return;
+    }
+
+    const incoming = lines.map((text, index) => ({
+      id: uid(),
+      text,
+      done: false,
+      sortOrder: index,
+    }));
+
+    if (mode === "replace") {
+      setTasks(incoming);
+      toast(`${incoming.length} tâche(s) importée(s) (liste remplacée).`);
+    } else {
+      setTasks((prev) => {
+        const existing = new Set(prev.map((t) => t.text.toLowerCase()));
+        const unique = incoming.filter(
+          (t) => !existing.has(t.text.toLowerCase()),
+        );
+        toast(
+          unique.length
+            ? `${unique.length} tâche(s) ajoutée(s)${
+                unique.length < incoming.length
+                  ? ` (${incoming.length - unique.length} doublon(s) ignoré(s))`
+                  : ""
+              }.`
+            : "Aucune nouvelle tâche (doublons uniquement).",
+        );
+        return [
+          ...prev,
+          ...unique.map((t, i) => ({
+            ...t,
+            sortOrder: prev.length + i,
+          })),
+        ];
+      });
+    }
+    setPasteBlock("");
   }
 
   async function saveDraft() {
@@ -375,7 +434,46 @@ export default function AppShell() {
                 </span>
               </div>
 
-              <form onSubmit={addTask} className="mt-4 flex gap-2">
+              <div className="mt-4 space-y-2">
+                <label className="block text-xs font-semibold text-[var(--muted)]">
+                  Coller une liste (une tâche par ligne)
+                </label>
+                <textarea
+                  value={pasteBlock}
+                  disabled={isReadOnly}
+                  onChange={(e) => setPasteBlock(e.target.value)}
+                  rows={5}
+                  placeholder={
+                    "Exemple :\nInstaller Windows 11\nConfigurer le réseau\nInstaller Office\n- Créer le compte utilisateur"
+                  }
+                  className="field min-h-28 resize-y"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Btn
+                    primary
+                    disabled={isReadOnly}
+                    onClick={() => importFromPaste("append")}
+                  >
+                    Importer (ajouter)
+                  </Btn>
+                  <Btn
+                    disabled={isReadOnly}
+                    onClick={() => importFromPaste("replace")}
+                  >
+                    Remplacer toute la liste
+                  </Btn>
+                </div>
+                <p className="text-xs text-[var(--muted)]">
+                  Accepte aussi les puces (-, •), numéros (1.) et cases [ ].
+                </p>
+              </div>
+
+              <div className="my-4 border-t border-[var(--line)]" />
+
+              <label className="mb-2 block text-xs font-semibold text-[var(--muted)]">
+                Ajout manuel
+              </label>
+              <form onSubmit={addTask} className="flex gap-2">
                 <input
                   value={newTask}
                   disabled={isReadOnly}
@@ -393,7 +491,7 @@ export default function AppShell() {
                   <div className="rounded-xl border border-dashed border-[var(--line)] bg-[#f4f7fb] px-4 py-8 text-center">
                     <div className="font-semibold">Aucune tâche pour l’instant</div>
                     <div className="mt-1 text-sm text-[var(--muted)]">
-                      Saisissez une tâche puis cliquez sur Ajouter.
+                      Collez une liste ci-dessus, ou ajoutez une tâche manuellement.
                     </div>
                   </div>
                 ) : (
