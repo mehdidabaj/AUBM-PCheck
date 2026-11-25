@@ -63,6 +63,15 @@ cd "$APP_DIR"
 npm install
 npm run build
 
+ADMIN_USER_NAME="${ADMIN_USERNAME:-admin}"
+ADMIN_PASS_VALUE="${ADMIN_PASSWORD:-}"
+if [[ -z "$ADMIN_PASS_VALUE" && -f "$APP_DIR/.env" ]]; then
+  ADMIN_PASS_VALUE="$(grep -E '^ADMIN_PASSWORD=' "$APP_DIR/.env" | cut -d= -f2- || true)"
+fi
+if [[ -z "$ADMIN_PASS_VALUE" ]]; then
+  ADMIN_PASS_VALUE="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-14)Aa1!"
+fi
+
 cat > "$APP_DIR/.env" <<EOF
 HOST=0.0.0.0
 PORT=8091
@@ -72,6 +81,12 @@ MYSQL_PORT=3306
 MYSQL_USER=${MYSQL_USER_NAME}
 MYSQL_PASSWORD=${MYSQL_PASS}
 MYSQL_DATABASE=${MYSQL_DB}
+ADMIN_USERNAME=${ADMIN_USER_NAME}
+ADMIN_PASSWORD=${ADMIN_PASS_VALUE}
+ADMIN_DISPLAY_NAME=Administrateur
+SESSION_TTL_HOURS=12
+SESSION_COOKIE_NAME=aubm_session
+COOKIE_SECURE=false
 EOF
 chmod 600 "$APP_DIR/.env"
 
@@ -87,8 +102,10 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 echo
-echo "Déploiement terminé (Express + MySQL/MariaDB)."
+echo "Déploiement terminé (Express + MySQL + auth)."
 echo "Service : systemctl status aubm-pcheck"
 echo "URL     : $PUBLIC_URL"
 echo "Health  : curl -s $PUBLIC_URL/api/health"
 echo "MySQL   : db=${MYSQL_DB} user=${MYSQL_USER_NAME}"
+echo "Admin   : ${ADMIN_USER_NAME} / (voir /opt/aubm-pcheck/.env ADMIN_PASSWORD)"
+echo "Astuce  : changez ADMIN_PASSWORD après la première connexion."

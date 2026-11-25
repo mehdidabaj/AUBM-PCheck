@@ -148,29 +148,36 @@ function LoginScreen({
   }
 
   return (
-    <div className="grid min-h-screen place-items-center px-4 py-10 anim-fade">
-      <div className="panel w-full max-w-lg p-8 anim-rise">
-        <div className="flex items-center gap-4">
+    <div className="relative min-h-screen overflow-hidden anim-fade">
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(115deg, rgba(20,48,41,0.92) 0%, rgba(31,83,70,0.78) 42%, rgba(232,238,233,0.2) 42.2%, transparent 70%)",
+        }}
+      />
+      <div className="relative mx-auto grid min-h-screen max-w-6xl items-center gap-10 px-6 py-12 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="anim-rise text-white lg:pr-8">
           <div className="brand-mark text-lg">PC</div>
-          <div>
-            <h1 className="font-display text-4xl font-extrabold tracking-tight text-[var(--text)]">
-              AUBM PCheck
-            </h1>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Préparation et contrôle des Todo PC
-            </p>
-          </div>
+          <h1 className="font-display mt-8 text-5xl font-extrabold leading-[0.95] tracking-tight sm:text-6xl">
+            AUBM PCheck
+          </h1>
+          <p className="mt-5 max-w-md text-lg text-emerald-50/90">
+            Accès sécurisé aux fiches de préparation PC.
+          </p>
         </div>
 
-        <p className="mt-8 text-lg font-semibold text-[var(--text)]">
-          Connectez-vous pour accéder aux fiches.
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
-          Les brouillons et l&apos;historique sont centralisés sur le serveur
-          AUBM. Identifiez-vous avec votre compte applicatif.
-        </p>
-
-        <form onSubmit={submit} className="mt-8 space-y-4">
+        <form
+          onSubmit={submit}
+          className="panel anim-rise w-full max-w-md justify-self-end space-y-4 p-7"
+          style={{ animationDelay: "80ms" }}
+        >
+          <h2 className="font-display text-2xl font-bold text-[var(--text)]">
+            Connexion
+          </h2>
+          <p className="text-sm text-[var(--muted)]">
+            Compte administrateur ou lecteur.
+          </p>
           <label className="block text-xs font-semibold text-[var(--muted)]">
             Identifiant
             <input

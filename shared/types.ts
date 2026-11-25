@@ -3,6 +3,9 @@ export type FicheStatus = "draft" | "finalized";
 /** Compte Windows sur lequel la tâche doit être réalisée */
 export type TaskAccount = "admin" | "user";
 
+/** Rôle applicatif (accès AUBM PCheck) */
+export type AppRole = "admin" | "reader";
+
 export type TaskItem = {
   id: string;
   text: string;
@@ -40,4 +43,20 @@ export type FicheInput = {
     done: boolean;
     account?: TaskAccount;
   }>;
+};
+
+export type PublicUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: AppRole;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type UserInput = {
+  username: string;
+  displayName: string;
+  password: string;
+  role: AppRole;
 };

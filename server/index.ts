@@ -1,17 +1,108 @@
+import cookieParser from "cookie-parser";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import fs from "fs";
+import helmet from "helmet";
 import path from "path";
-import { getMysqlConfig, initDb } from "./db.js";
+import {
+  attachUser,
+  getSessionCookieName,
+  readSessionToken,
+  requireAdmin,
+  requireAuth,
+  type AuthedRequest,
+} from "./auth.js";
+import { getMysqlConfig, initDb, loadEnvFile } from "./db.js";
 import { deleteFiche, getFiche, listFiches, upsertFiche } from "./fiches.js";
 import { findProjectRoot } from "./paths.js";
-import type { FicheInput, FicheStatus } from "../shared/types.js";
+import {
+  createSession,
+  destroySession,
+  destroyUserSessions,
+  purgeExpiredSessions,
+} from "./sessions.js";
+import {
+  authenticate,
+  createUser,
+  deleteUser,
+  ensureBootstrapAdmin,
+  listUsers,
+  updateUser,
+} from "./users.js";
+import type { AppRole, FicheInput, FicheStatus } from "../shared/types.js";
+
+loadEnvFile();
+
+function paramId(value: string | string[]): string {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
+const isProd = process.env.NODE_ENV === "production";
+const BUILD_ID = "auth-mysql-2026-11-25d";
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.set("trust proxy", 1);
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "script-src": ["'self'"],
+        "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        "font-src": ["'self'", "https://fonts.gstatic.com", "data:"],
+        "img-src": ["'self'", "data:", "blob:"],
+        "connect-src": ["'self'"],
+        "object-src": ["'none'"],
+        "base-uri": ["'self'"],
+        "frame-ancestors": ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }),
+);
+app.use(express.json({ limit: "512kb" }));
+app.use(cookieParser());
+app.use(attachUser);
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Trop de tentatives. Réessayez plus tard." },
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 180,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/", apiLimiter);
+
+function setSessionCookie(res: express.Response, token: string, expiresAt: Date) {
+  res.cookie(getSessionCookieName(), token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isProd && process.env.COOKIE_SECURE === "true",
+    path: "/",
+    expires: expiresAt,
+  });
+}
+
+function clearSessionCookie(res: express.Response) {
+  res.clearCookie(getSessionCookieName(), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isProd && process.env.COOKIE_SECURE === "true",
+    path: "/",
+  });
+}
 
 app.get("/api/health", async (_req, res) => {
   try {
@@ -20,23 +111,137 @@ app.get("/api/health", async (_req, res) => {
     res.json({
       ok: true,
       service: "aubm-pcheck",
-      build: "mysql-2026-11-25c",
+      build: BUILD_ID,
       host: HOST,
       port: PORT,
       db: "mysql",
+      auth: true,
       mysqlHost: cfg.host,
       mysqlDatabase: cfg.database,
     });
   } catch (err) {
     res.status(500).json({
       ok: false,
-      build: "mysql-2026-11-25c",
+      build: BUILD_ID,
       error: err instanceof Error ? err.message : "Erreur base de données",
     });
   }
 });
 
-app.get("/api/fiches", async (req, res) => {
+app.get("/api/auth/me", (req: AuthedRequest, res) => {
+  if (!req.user) {
+    res.status(401).json({ error: "Non connecté." });
+    return;
+  }
+  res.json({ user: req.user });
+});
+
+app.post("/api/auth/login", loginLimiter, async (req, res) => {
+  try {
+    const username = String(req.body?.username || "");
+    const password = String(req.body?.password || "");
+    if (!username || !password) {
+      res.status(400).json({ error: "Identifiant et mot de passe requis." });
+      return;
+    }
+    const user = await authenticate(username, password);
+    if (!user) {
+      res.status(401).json({ error: "Identifiants incorrects." });
+      return;
+    }
+    const session = await createSession(user.id);
+    setSessionCookie(res, session.token, session.expiresAt);
+    res.json({ user });
+  } catch (err) {
+    console.error("POST /api/auth/login", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    await destroySession(readSessionToken(req));
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("POST /api/auth/logout", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    res.json(await listUsers());
+  } catch (err) {
+    console.error("GET /api/users", err);
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const user = await createUser({
+      username: String(req.body?.username || ""),
+      displayName: String(req.body?.displayName || ""),
+      password: String(req.body?.password || ""),
+      role: (req.body?.role === "admin" ? "admin" : "reader") as AppRole,
+    });
+    res.status(201).json(user);
+  } catch (err) {
+    console.error("POST /api/users", err);
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.patch("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const patch: {
+      displayName?: string;
+      role?: AppRole;
+      password?: string;
+    } = {};
+    if (typeof req.body?.displayName === "string") {
+      patch.displayName = req.body.displayName;
+    }
+    if (req.body?.role === "admin" || req.body?.role === "reader") {
+      patch.role = req.body.role;
+    }
+    if (typeof req.body?.password === "string" && req.body.password.length) {
+      patch.password = req.body.password;
+    }
+    const user = await updateUser(paramId(req.params.id), patch);
+    res.json(user);
+  } catch (err) {
+    console.error("PATCH /api/users/:id", err);
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.delete("/api/users/:id", requireAuth, requireAdmin, async (req: AuthedRequest, res) => {
+  try {
+    const id = paramId(req.params.id);
+    await deleteUser(id, req.user!.id);
+    await destroyUserSessions(id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/users/:id", err);
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Erreur serveur",
+    });
+  }
+});
+
+app.get("/api/fiches", requireAuth, async (req, res) => {
   try {
     const status = req.query.status as FicheStatus | undefined;
     if (status && status !== "draft" && status !== "finalized") {
@@ -52,7 +257,7 @@ app.get("/api/fiches", async (req, res) => {
   }
 });
 
-app.post("/api/fiches", async (req, res) => {
+app.post("/api/fiches", requireAuth, requireAdmin, async (req, res) => {
   try {
     const body = req.body as FicheInput;
 
@@ -85,9 +290,9 @@ app.post("/api/fiches", async (req, res) => {
   }
 });
 
-app.get("/api/fiches/:id", async (req, res) => {
+app.get("/api/fiches/:id", requireAuth, async (req, res) => {
   try {
-    const fiche = await getFiche(req.params.id);
+    const fiche = await getFiche(paramId(req.params.id));
     if (!fiche) {
       res.status(404).json({ error: "Fiche introuvable." });
       return;
@@ -101,10 +306,10 @@ app.get("/api/fiches/:id", async (req, res) => {
   }
 });
 
-app.put("/api/fiches/:id", async (req, res) => {
+app.put("/api/fiches/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const body = req.body as FicheInput;
-    const fiche = await upsertFiche({ ...body, id: req.params.id });
+    const fiche = await upsertFiche({ ...body, id: paramId(req.params.id) });
     res.json(fiche);
   } catch (err) {
     console.error("PUT /api/fiches/:id", err);
@@ -114,9 +319,9 @@ app.put("/api/fiches/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/fiches/:id", async (req, res) => {
+app.delete("/api/fiches/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const ok = await deleteFiche(req.params.id);
+    const ok = await deleteFiche(paramId(req.params.id));
     if (!ok) {
       res.status(404).json({ error: "Fiche introuvable." });
       return;
@@ -187,6 +392,8 @@ app.use(
 async function main() {
   try {
     await initDb();
+    await ensureBootstrapAdmin();
+    await purgeExpiredSessions();
     const cfg = getMysqlConfig();
     console.log(
       `MySQL prêt (${cfg.host}:${cfg.port}/${cfg.database} user=${cfg.user})`,
@@ -198,9 +405,7 @@ async function main() {
 
   app.listen(PORT, HOST, () => {
     console.log(`AUBM PCheck écoute sur http://${HOST}:${PORT}`);
-    console.log(`URL publique attendue : http://195.200.200.16:8091`);
-    console.log(`Racine projet : ${rootDir}`);
-    console.log(`Frontend : ${publicDir}`);
+    console.log(`Build ${BUILD_ID}`);
   });
 }
 

@@ -5,7 +5,7 @@ import { findProjectRoot } from "./paths.js";
 
 let pool: Pool | null = null;
 
-function loadEnvFile() {
+export function loadEnvFile() {
   const root = findProjectRoot(import.meta.url);
   const envPath = path.join(root, ".env");
   if (!fs.existsSync(envPath)) return;
@@ -73,6 +73,34 @@ async function migrate(poolInstance: Pool) {
       INDEX idx_tasks_fiche_id (fiche_id),
       CONSTRAINT fk_tasks_fiche
         FOREIGN KEY (fiche_id) REFERENCES fiches(id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await poolInstance.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id VARCHAR(36) PRIMARY KEY NOT NULL,
+      username VARCHAR(64) NOT NULL,
+      display_name VARCHAR(120) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      role VARCHAR(16) NOT NULL,
+      created_at VARCHAR(40) NOT NULL,
+      updated_at VARCHAR(40) NOT NULL,
+      UNIQUE KEY uq_users_username (username),
+      INDEX idx_users_role (role)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await poolInstance.query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id VARCHAR(128) PRIMARY KEY NOT NULL,
+      user_id VARCHAR(36) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at VARCHAR(40) NOT NULL,
+      INDEX idx_sessions_user (user_id),
+      INDEX idx_sessions_expires (expires_at),
+      CONSTRAINT fk_sessions_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
