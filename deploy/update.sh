@@ -10,6 +10,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+git config --global --add safe.directory "$APP_DIR" || true
 cd "$APP_DIR"
 git fetch origin
 git checkout "$BRANCH"

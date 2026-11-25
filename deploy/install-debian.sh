@@ -47,9 +47,13 @@ if ! id -u "$APP_USER" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$APP_DIR"
+git config --global --add safe.directory "$APP_DIR" || true
+
 if [[ ! -d "$APP_DIR/.git" ]]; then
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
 else
+  # Si le dépôt a été cloné sous un autre utilisateur (safe.directory / ownership)
+  chown -R root:root "$APP_DIR/.git" 2>/dev/null || true
   git -C "$APP_DIR" fetch origin
   git -C "$APP_DIR" checkout "$BRANCH"
   git -C "$APP_DIR" reset --hard "origin/$BRANCH"
