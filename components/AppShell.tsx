@@ -21,6 +21,66 @@ function accountLabel(account: TaskAccount) {
   return account === "admin" ? "Administrateur" : "Utilisateur";
 }
 
+function AccountPicker({
+  value,
+  onChange,
+  disabled = false,
+  label = "Cette tâche se fera sur le compte",
+}: {
+  value: TaskAccount;
+  onChange: (value: TaskAccount) => void;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[#f4f7fb] p-3">
+      <div className="text-sm font-semibold text-[var(--text)]">{label}</div>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange("admin")}
+          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
+            value === "admin"
+              ? "border-amber-500 bg-amber-50 ring-2 ring-amber-200"
+              : "border-[var(--line)] bg-white hover:border-amber-300"
+          }`}
+        >
+          <div className="text-sm font-bold text-amber-900">Administrateur</div>
+          <div className="mt-0.5 text-xs text-[var(--muted)]">
+            Connexion en compte admin
+          </div>
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange("user")}
+          className={`rounded-xl border px-3 py-3 text-left transition disabled:opacity-40 ${
+            value === "user"
+              ? "border-sky-500 bg-sky-50 ring-2 ring-sky-200"
+              : "border-[var(--line)] bg-white hover:border-sky-300"
+          }`}
+        >
+          <div className="text-sm font-bold text-sky-900">Utilisateur</div>
+          <div className="mt-0.5 text-xs text-[var(--muted)]">
+            Connexion en compte normal
+          </div>
+        </button>
+      </div>
+      <p className="mt-2 text-xs font-medium text-[var(--muted)]">
+        Sélection actuelle :{" "}
+        <span
+          className={
+            value === "admin" ? "text-amber-800" : "text-sky-800"
+          }
+        >
+          {accountLabel(value)}
+        </span>
+      </p>
+    </div>
+  );
+}
+
 function normalizeAccount(value: TaskAccount | string | undefined): TaskAccount {
   return value === "admin" ? "admin" : "user";
 }
@@ -651,92 +711,76 @@ export default function AppShell() {
                 </div>
               </div>
 
-              <div className="mt-4 space-y-2">
-                <label className="block text-xs font-semibold text-[var(--muted)]">
+              <div className="mt-4 space-y-3">
+                <div className="text-sm font-semibold text-[var(--text)]">
                   Coller une liste (une tâche par ligne)
-                </label>
+                </div>
+                <AccountPicker
+                  value={pasteAccount}
+                  disabled={isReadOnly}
+                  onChange={setPasteAccount}
+                  label="Ces tâches collées se feront sur le compte"
+                />
                 <textarea
                   value={pasteBlock}
                   disabled={isReadOnly}
                   onChange={(e) => setPasteBlock(e.target.value)}
                   rows={5}
                   placeholder={
-                    "Exemple :\nInstaller Windows 11\nConfigurer le réseau\nInstaller Office\n- Créer le compte utilisateur"
+                    pasteAccount === "admin"
+                      ? "Exemple (admin) :\nInstaller Windows 11\nConfigurer le domaine\nInstaller les drivers"
+                      : "Exemple (utilisateur) :\nConfigurer le bureau\nInstaller Office\nTester l’imprimante"
                   }
                   className="field min-h-28 resize-y"
                 />
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-xs font-semibold text-[var(--muted)]">
-                    Compte pour l’import
-                    <select
-                      value={pasteAccount}
-                      disabled={isReadOnly}
-                      onChange={(e) =>
-                        setPasteAccount(e.target.value as TaskAccount)
-                      }
-                      className="field mt-1 min-w-44"
-                    >
-                      <option value="admin">Administrateur</option>
-                      <option value="user">Utilisateur</option>
-                    </select>
-                  </label>
-                  <div className="flex flex-wrap gap-2 self-end">
-                    <Btn
-                      primary
-                      disabled={isReadOnly}
-                      onClick={() => importFromPaste("append")}
-                    >
-                      Importer (ajouter)
-                    </Btn>
-                    <Btn
-                      disabled={isReadOnly}
-                      onClick={() => importFromPaste("replace")}
-                    >
-                      Remplacer toute la liste
-                    </Btn>
-                  </div>
+                <div className="flex flex-wrap gap-2">
+                  <Btn
+                    primary
+                    disabled={isReadOnly}
+                    onClick={() => importFromPaste("append")}
+                  >
+                    Importer en {accountLabel(pasteAccount)}
+                  </Btn>
+                  <Btn
+                    disabled={isReadOnly}
+                    onClick={() => importFromPaste("replace")}
+                  >
+                    Remplacer toute la liste
+                  </Btn>
                 </div>
                 <p className="text-xs text-[var(--muted)]">
-                  Chaque tâche importée est marquée pour le compte choisi
-                  (admin ou utilisateur). Accepte aussi les puces (-, •),
-                  numéros (1.) et cases [ ].
+                  Accepte aussi les puces (-, •), numéros (1.) et cases [ ].
                 </p>
               </div>
 
               <div className="my-4 border-t border-[var(--line)]" />
 
-              <label className="mb-2 block text-xs font-semibold text-[var(--muted)]">
-                Ajout manuel
-              </label>
-              <form
-                onSubmit={addTask}
-                className="flex flex-wrap items-end gap-2"
-              >
-                <input
-                  value={newTask}
+              <div className="space-y-3">
+                <div className="text-sm font-semibold text-[var(--text)]">
+                  Ajout manuel
+                </div>
+                <AccountPicker
+                  value={newTaskAccount}
                   disabled={isReadOnly}
-                  onChange={(e) => setNewTask(e.target.value)}
-                  placeholder="Saisir une tâche à ajouter…"
-                  className="field min-w-48 flex-1"
+                  onChange={setNewTaskAccount}
+                  label="Cette tâche se fera sur le compte"
                 />
-                <label className="text-xs font-semibold text-[var(--muted)]">
-                  Compte
-                  <select
-                    value={newTaskAccount}
+                <form
+                  onSubmit={addTask}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <input
+                    value={newTask}
                     disabled={isReadOnly}
-                    onChange={(e) =>
-                      setNewTaskAccount(e.target.value as TaskAccount)
-                    }
-                    className="field mt-1 min-w-40"
-                  >
-                    <option value="admin">Administrateur</option>
-                    <option value="user">Utilisateur</option>
-                  </select>
-                </label>
-                <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
-                  Ajouter
-                </Btn>
-              </form>
+                    onChange={(e) => setNewTask(e.target.value)}
+                    placeholder={`Tâche ${accountLabel(newTaskAccount).toLowerCase()}…`}
+                    className="field min-w-48 flex-1"
+                  />
+                  <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
+                    Ajouter en {accountLabel(newTaskAccount)}
+                  </Btn>
+                </form>
+              </div>
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--muted)]">
