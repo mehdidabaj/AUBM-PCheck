@@ -1,11 +1,20 @@
 import path from "path";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+function stripCrossOrigin(): Plugin {
+  return {
+    name: "strip-crossorigin",
+    transformIndexHtml(html) {
+      return html.replace(/ crossorigin/g, "");
+    },
+  };
+}
+
 export default defineConfig({
   root: path.resolve("client"),
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), stripCrossOrigin()],
   resolve: {
     alias: {
       "@shared": path.resolve("shared"),
@@ -24,5 +33,6 @@ export default defineConfig({
   build: {
     outDir: path.resolve("dist/public"),
     emptyOutDir: true,
+    modulePreload: false,
   },
 });

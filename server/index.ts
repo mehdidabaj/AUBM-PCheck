@@ -41,29 +41,43 @@ const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
 const isProd = process.env.NODE_ENV === "production";
-const BUILD_ID = "auth-mysql-2026-11-25d";
+const BUILD_ID = "auth-mysql-2026-11-25e";
 
 const app = express();
 app.set("trust proxy", 1);
 app.use(
   helmet({
+    // CSP assouplie : les builds Vite (module + crossorigin) cassent sinon
+    // l’UI (page blanche) si les en-têtes CORS/CSP sont trop stricts.
     contentSecurityPolicy: {
-      useDefaults: true,
+      useDefaults: false,
       directives: {
-        "default-src": ["'self'"],
-        "script-src": ["'self'"],
-        "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-        "font-src": ["'self'", "https://fonts.gstatic.com", "data:"],
-        "img-src": ["'self'", "data:", "blob:"],
-        "connect-src": ["'self'"],
-        "object-src": ["'none'"],
-        "base-uri": ["'self'"],
-        "frame-ancestors": ["'none'"],
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        fontSrc: ["'self'", "data:"],
+        imgSrc: ["'self'", "data:", "blob:"],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'none'"],
       },
     },
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    // Site servi en HTTP clair sur IP:port — HSTS casserait le chargement
+    hsts: false,
   }),
 );
+
+// Nécessaire pour les <script type="module" crossorigin> générés par Vite
+app.use((req, res, next) => {
+  if (req.path.startsWith("/assets/")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  }
+  next();
+});
 app.use(express.json({ limit: "512kb" }));
 app.use(cookieParser());
 app.use(attachUser);
