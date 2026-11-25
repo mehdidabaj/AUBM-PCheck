@@ -148,20 +148,52 @@ export default function AppShell() {
   }, []);
 
   const refresh = useCallback(async () => {
+    const parseList = async (res: Response) => {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (data && typeof data === "object" && "error" in data
+            ? String((data as { error?: string }).error)
+            : null) || `Erreur API (${res.status})`,
+        );
+      }
+      if (!Array.isArray(data)) {
+        throw new Error("Réponse API invalide (liste attendue).");
+      }
+      return data as PcTodoFiche[];
+    };
+
     const [d, h] = await Promise.all([
-      fetch("/api/fiches?status=draft").then((r) => r.json()),
-      fetch("/api/fiches?status=finalized").then((r) => r.json()),
+      fetch("/api/fiches?status=draft").then(parseList),
+      fetch("/api/fiches?status=finalized").then(parseList),
     ]);
     setDrafts(d);
     setHistory(h);
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      await refresh();
-      setLoading(false);
+      try {
+        await refresh();
+      } catch (err) {
+        if (!cancelled) {
+          setDrafts([]);
+          setHistory([]);
+          toast(
+            err instanceof Error
+              ? err.message
+              : "Impossible de charger les fiches.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
-  }, [refresh]);
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh, toast]);
 
   const filteredHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();

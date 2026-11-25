@@ -36,6 +36,7 @@ fi
 
 cd "$APP_DIR"
 npm install
+npm rebuild better-sqlite3
 npm run build
 
 cat > "$APP_DIR/.env" <<EOF
