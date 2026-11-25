@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  DragEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { downloadPdf, printPdf } from "@/lib/pdf";
 import type { PcTodoFiche, TaskItem } from "@/lib/types";
 
@@ -44,6 +51,10 @@ export default function AppShell() {
   const [newTask, setNewTask] = useState("");
   const [pasteBlock, setPasteBlock] = useState("");
   const [tasks, setTasks] = useState<EditorTask[]>(emptyTasks);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
 
   const toast = useCallback((message: string) => {
     setStatus(message);
@@ -86,6 +97,10 @@ export default function AppShell() {
     setNewTask("");
     setPasteBlock("");
     setTasks([]);
+    setEditingTaskId(null);
+    setEditingText("");
+    setDragTaskId(null);
+    setDragOverTaskId(null);
     setView("editor");
   }
 
@@ -98,6 +113,8 @@ export default function AppShell() {
     setStartDate(fiche.startDate || todayISO());
     setEndDate(fiche.endDate || todayISO());
     setTasks(fiche.tasks.map((t) => ({ ...t })));
+    setEditingTaskId(null);
+    setEditingText("");
     setView("editor");
   }
 
@@ -111,10 +128,11 @@ export default function AppShell() {
       endDate: status === "finalized" ? endDate : null,
       status,
       finalizedAt: status === "finalized" ? new Date().toISOString() : null,
-      tasks: tasks.map((t) => ({
+      tasks: tasks.map((t, index) => ({
         id: t.id,
         text: t.text,
         done: t.done,
+        sortOrder: index,
       })),
     };
   }
@@ -201,6 +219,97 @@ export default function AppShell() {
       });
     }
     setPasteBlock("");
+  }
+
+  function startEditTask(task: EditorTask) {
+    if (isReadOnly) return;
+    setEditingTaskId(task.id);
+    setEditingText(task.text);
+  }
+
+  function cancelEditTask() {
+    setEditingTaskId(null);
+    setEditingText("");
+  }
+
+  function saveEditTask() {
+    if (isReadOnly || !editingTaskId) return;
+    const text = editingText.trim();
+    if (!text) {
+      toast("Le libellé de la tâche ne peut pas être vide.");
+      return;
+    }
+    setTasks((prev) =>
+      prev.map((t) => (t.id === editingTaskId ? { ...t, text } : t)),
+    );
+    cancelEditTask();
+    toast("Tâche modifiée.");
+  }
+
+  function deleteTask(id: string) {
+    if (isReadOnly) return;
+    setTasks((prev) =>
+      prev
+        .filter((t) => t.id !== id)
+        .map((t, index) => ({ ...t, sortOrder: index })),
+    );
+    if (editingTaskId === id) cancelEditTask();
+  }
+
+  function clearAllTasks() {
+    if (isReadOnly || !tasks.length) return;
+    if (!window.confirm("Supprimer toute la liste des tâches ?")) return;
+    setTasks([]);
+    cancelEditTask();
+    toast("Liste des tâches vidée.");
+  }
+
+  function moveTask(fromIndex: number, toIndex: number) {
+    if (isReadOnly) return;
+    if (
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= tasks.length ||
+      toIndex >= tasks.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+    setTasks((prev) => {
+      const next = [...prev];
+      const [item] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, item);
+      return next.map((t, index) => ({ ...t, sortOrder: index }));
+    });
+  }
+
+  function onTaskDragStart(taskId: string) {
+    if (isReadOnly) return;
+    setDragTaskId(taskId);
+  }
+
+  function onTaskDragOver(e: DragEvent, taskId: string) {
+    if (isReadOnly || !dragTaskId || dragTaskId === taskId) return;
+    e.preventDefault();
+    setDragOverTaskId(taskId);
+  }
+
+  function onTaskDrop(targetId: string) {
+    if (isReadOnly || !dragTaskId || dragTaskId === targetId) {
+      setDragTaskId(null);
+      setDragOverTaskId(null);
+      return;
+    }
+    const fromIndex = tasks.findIndex((t) => t.id === dragTaskId);
+    const toIndex = tasks.findIndex((t) => t.id === targetId);
+    moveTask(fromIndex, toIndex);
+    setDragTaskId(null);
+    setDragOverTaskId(null);
+  }
+
+  function onTaskDragEnd() {
+    setDragTaskId(null);
+    setDragOverTaskId(null);
   }
 
   async function saveDraft() {
@@ -486,7 +595,22 @@ export default function AppShell() {
                 </Btn>
               </form>
 
-              <div className="mt-4 space-y-2">
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-[var(--muted)]">
+                  Glissez une tâche pour changer son ordre, ou utilisez ▲ / ▼.
+                </p>
+                {!isReadOnly && tasks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllTasks}
+                    className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
+                  >
+                    Vider la liste
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-3 space-y-2">
                 {tasks.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--line)] bg-[#f4f7fb] px-4 py-8 text-center">
                     <div className="font-semibold">Aucune tâche pour l’instant</div>
@@ -495,49 +619,139 @@ export default function AppShell() {
                     </div>
                   </div>
                 ) : (
-                  tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[#f4f7fb] px-3 py-2"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={task.done}
-                        disabled={isReadOnly}
-                        onChange={(e) =>
-                          setTasks((prev) =>
-                            prev.map((t) =>
-                              t.id === task.id
-                                ? { ...t, done: e.target.checked }
-                                : t,
-                            ),
-                          )
-                        }
-                        className="h-4 w-4 accent-[var(--accent)]"
-                      />
-                      <span
-                        className={`flex-1 text-sm ${
-                          task.done
-                            ? "text-[var(--muted)] line-through"
-                            : "text-[var(--text)]"
+                  tasks.map((task, index) => {
+                    const isEditing = editingTaskId === task.id;
+                    const isDragging = dragTaskId === task.id;
+                    const isDropTarget = dragOverTaskId === task.id;
+
+                    return (
+                      <div
+                        key={task.id}
+                        draggable={!isReadOnly && !isEditing}
+                        onDragStart={() => onTaskDragStart(task.id)}
+                        onDragOver={(e) => onTaskDragOver(e, task.id)}
+                        onDrop={() => onTaskDrop(task.id)}
+                        onDragEnd={onTaskDragEnd}
+                        className={`flex items-center gap-2 rounded-xl border bg-[#f4f7fb] px-3 py-2 transition ${
+                          isDropTarget
+                            ? "border-[var(--accent)] ring-2 ring-teal-200"
+                            : "border-[var(--line)]"
+                        } ${isDragging ? "opacity-50" : ""} ${
+                          !isReadOnly && !isEditing ? "cursor-grab active:cursor-grabbing" : ""
                         }`}
                       >
-                        {task.text}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={isReadOnly}
-                        onClick={() =>
-                          setTasks((prev) =>
-                            prev.filter((t) => t.id !== task.id),
-                          )
-                        }
-                        className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50 disabled:opacity-40"
-                      >
-                        Supprimer
-                      </button>
-                    </div>
-                  ))
+                        {!isReadOnly && (
+                          <span
+                            className="select-none px-1 text-sm text-[var(--muted)]"
+                            title="Glisser pour déplacer"
+                            aria-hidden
+                          >
+                            ⋮⋮
+                          </span>
+                        )}
+
+                        <input
+                          type="checkbox"
+                          checked={task.done}
+                          disabled={isReadOnly}
+                          onChange={(e) =>
+                            setTasks((prev) =>
+                              prev.map((t) =>
+                                t.id === task.id
+                                  ? { ...t, done: e.target.checked }
+                                  : t,
+                              ),
+                            )
+                          }
+                          className="h-4 w-4 accent-[var(--accent)]"
+                        />
+
+                        {isEditing ? (
+                          <input
+                            autoFocus
+                            value={editingText}
+                            onChange={(e) => setEditingText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                saveEditTask();
+                              }
+                              if (e.key === "Escape") cancelEditTask();
+                            }}
+                            className="field flex-1 py-1.5 text-sm"
+                          />
+                        ) : (
+                          <span
+                            className={`flex-1 text-sm ${
+                              task.done
+                                ? "text-[var(--muted)] line-through"
+                                : "text-[var(--text)]"
+                            }`}
+                          >
+                            {task.text}
+                          </span>
+                        )}
+
+                        {!isReadOnly && (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={saveEditTask}
+                                  className="rounded-lg px-2 py-1 text-sm font-semibold text-[var(--accent-strong)] hover:bg-teal-50"
+                                >
+                                  OK
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelEditTask}
+                                  className="rounded-lg px-2 py-1 text-sm text-[var(--muted)] hover:bg-slate-100"
+                                >
+                                  Annuler
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Monter"
+                                  disabled={index === 0}
+                                  onClick={() => moveTask(index, index - 1)}
+                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white disabled:opacity-30"
+                                >
+                                  ▲
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Descendre"
+                                  disabled={index === tasks.length - 1}
+                                  onClick={() => moveTask(index, index + 1)}
+                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white disabled:opacity-30"
+                                >
+                                  ▼
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditTask(task)}
+                                  className="rounded-lg px-2 py-1 text-sm text-[var(--text)] hover:bg-white"
+                                >
+                                  Modifier
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteTask(task.id)}
+                                  className="rounded-lg px-2 py-1 text-sm text-[var(--danger)] hover:bg-red-50"
+                                >
+                                  Supprimer
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </Card>
