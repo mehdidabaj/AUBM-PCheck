@@ -87,7 +87,7 @@ const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
 const isProd = process.env.NODE_ENV === "production";
-const BUILD_ID = "audit-fixes-2026-11-26a";
+const BUILD_ID = "fix-task-uid-2026-11-26b";
 
 const app = express();
 app.set("trust proxy", 1);

@@ -52,8 +52,31 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
+/** IDs clients : randomUUID exige un contexte sécurisé (HTTPS/localhost).
+ *  Sur http://IP:port (prod Debian) il lève → page blanche / import mort. */
 function uid() {
-  return crypto.randomUUID();
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // contexte non sécurisé
+  }
+  try {
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
+        "",
+      );
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+  } catch {
+    // ignore
+  }
+  return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 function formatDate(value: string | null) {
@@ -695,71 +718,70 @@ function AppShell({
 
   function addTask(e?: FormEvent) {
     e?.preventDefault();
+    e?.stopPropagation();
     if (isReadOnly) return;
     const text = newTask.trim();
     if (!text) {
       toast("Saisissez le libellé de la tâche.");
       return;
     }
-    setTasks((prev) =>
-      sortTasksByAccount([
-        ...prev,
-        {
-          id: uid(),
-          text,
-          done: false,
-          sortOrder: prev.length,
-          account: newTaskAccount,
-        },
-      ]),
-    );
+    const account = newTaskAccount === "admin" ? "admin" : "user";
+    const task: EditorTask = {
+      id: uid(),
+      text,
+      done: false,
+      sortOrder: tasks.length,
+      account,
+    };
+    setTasks((prev) => sortTasksByAccount([...prev, task]));
     setNewTask("");
+    toast(`Tâche ajoutée (${accountLabel(account)}).`);
   }
 
   function importFromPaste(mode: "append" | "replace") {
     if (isReadOnly) return;
-    const lines = parseTaskLines(pasteBlock);
+    const raw = pasteBlock;
+    const lines = parseTaskLines(raw);
     if (!lines.length) {
       toast("Collez une liste de tâches (une par ligne).");
       return;
     }
 
-    const incoming = lines.map((text, index) => ({
+    const account = pasteAccount === "admin" ? "admin" : "user";
+    const incoming: EditorTask[] = lines.map((text, index) => ({
       id: uid(),
       text,
       done: false,
       sortOrder: index,
-      account: pasteAccount,
+      account,
     }));
 
     if (mode === "replace") {
       setTasks(sortTasksByAccount(incoming));
+      setPasteBlock("");
       toast(
-        `${incoming.length} tâche(s) importée(s) (${accountLabel(pasteAccount)}, liste remplacée).`,
+        `${incoming.length} tâche(s) importée(s) (${accountLabel(account)}, liste remplacée).`,
       );
-    } else {
-      setTasks((prev) => {
-        const existing = new Set(
-          prev
-            .filter((t) => t.account === pasteAccount)
-            .map((t) => t.text.toLowerCase()),
-        );
-        const unique = incoming.filter(
-          (t) => !existing.has(t.text.toLowerCase()),
-        );
-        toast(
-          unique.length
-            ? `${unique.length} tâche(s) ${accountLabel(pasteAccount).toLowerCase()} ajoutée(s)${
-                unique.length < incoming.length
-                  ? ` (${incoming.length - unique.length} doublon(s) ignoré(s))`
-                  : ""
-              }.`
-            : "Aucune nouvelle tâche (doublons uniquement).",
-        );
-        return sortTasksByAccount([...prev, ...unique]);
-      });
+      return;
     }
+
+    const existing = new Set(
+      tasks
+        .filter((t) => t.account === account)
+        .map((t) => t.text.toLowerCase()),
+    );
+    const unique = incoming.filter((t) => !existing.has(t.text.toLowerCase()));
+    setTasks((prev) => sortTasksByAccount([...prev, ...unique]));
     setPasteBlock("");
+    toast(
+      unique.length
+        ? `${unique.length} tâche(s) ${accountLabel(account).toLowerCase()} ajoutée(s)${
+            unique.length < incoming.length
+              ? ` (${incoming.length - unique.length} doublon(s) ignoré(s))`
+              : ""
+          }.`
+        : "Aucune nouvelle tâche (doublons uniquement).",
+    );
   }
 
   function startEditTask(task: EditorTask) {
@@ -1313,14 +1335,30 @@ function AppShell({
                     <div className="flex flex-wrap gap-2">
                       <Btn
                         primary
-                        disabled={isReadOnly}
-                        onClick={() => importFromPaste("append")}
+                        type="button"
+                        disabled={isReadOnly || !pasteBlock.trim()}
+                        onClick={() => {
+                          try {
+                            importFromPaste("append");
+                          } catch (err) {
+                            console.error(err);
+                            toast("Import impossible.");
+                          }
+                        }}
                       >
                         Importer en {accountLabel(pasteAccount)}
                       </Btn>
                       <Btn
-                        disabled={isReadOnly}
-                        onClick={() => importFromPaste("replace")}
+                        type="button"
+                        disabled={isReadOnly || !pasteBlock.trim()}
+                        onClick={() => {
+                          try {
+                            importFromPaste("replace");
+                          } catch (err) {
+                            console.error(err);
+                            toast("Remplacement impossible.");
+                          }
+                        }}
                       >
                         Remplacer toute la liste
                       </Btn>
@@ -1343,17 +1381,32 @@ function AppShell({
                       label="Cette tâche se fera sur le compte"
                     />
                     <form
-                      onSubmit={addTask}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        addTask(e);
+                      }}
                       className="flex flex-wrap items-center gap-2"
+                      action="#"
                     >
                       <input
                         value={newTask}
                         disabled={isReadOnly}
                         onChange={(e) => setNewTask(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            addTask();
+                          }
+                        }}
                         placeholder={`Tâche ${accountLabel(newTaskAccount).toLowerCase()}…`}
                         className="field min-w-48 flex-1"
                       />
-                      <Btn primary disabled={isReadOnly} onClick={() => addTask()}>
+                      <Btn
+                        primary
+                        type="button"
+                        disabled={isReadOnly}
+                        onClick={() => addTask()}
+                      >
                         Ajouter en {accountLabel(newTaskAccount)}
                       </Btn>
                     </form>
