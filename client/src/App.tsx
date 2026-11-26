@@ -52,18 +52,14 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-/** IDs clients : randomUUID exige un contexte sécurisé (HTTPS/localhost).
- *  Sur http://IP:port (prod Debian) il lève → page blanche / import mort. */
-function uid() {
+/**
+ * IDs clients sans crypto.randomUUID : sur http://IP:port (prod Debian)
+ * randomUUID n’est pas un contexte sécurisé → exception → page blanche.
+ * On n’appelle JAMAIS randomUUID ici.
+ */
+function uid(): string {
   try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-  } catch {
-    // contexte non sécurisé
-  }
-  try {
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
       const bytes = new Uint8Array(16);
       crypto.getRandomValues(bytes);
       bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -738,16 +734,19 @@ function AppShell({
     toast(`Tâche ajoutée (${accountLabel(account)}).`);
   }
 
-  function importFromPaste(mode: "append" | "replace") {
+  function importFromPaste(
+    mode: "append" | "replace",
+    accountOverride?: TaskAccount,
+  ) {
     if (isReadOnly) return;
-    const raw = pasteBlock;
-    const lines = parseTaskLines(raw);
+    const lines = parseTaskLines(pasteBlock);
     if (!lines.length) {
       toast("Collez une liste de tâches (une par ligne).");
       return;
     }
 
-    const account = pasteAccount === "admin" ? "admin" : "user";
+    const account: TaskAccount =
+      (accountOverride ?? pasteAccount) === "admin" ? "admin" : "user";
     const incoming: EditorTask[] = lines.map((text, index) => ({
       id: uid(),
       text,
@@ -757,10 +756,16 @@ function AppShell({
     }));
 
     if (mode === "replace") {
-      setTasks(sortTasksByAccount(incoming));
+      // Remplace uniquement le groupe du compte ciblé, conserve l’autre
+      setTasks((prev) =>
+        sortTasksByAccount([
+          ...prev.filter((t) => t.account !== account),
+          ...incoming,
+        ]),
+      );
       setPasteBlock("");
       toast(
-        `${incoming.length} tâche(s) importée(s) (${accountLabel(account)}, liste remplacée).`,
+        `${incoming.length} tâche(s) ${accountLabel(account).toLowerCase()} (liste ${accountLabel(account).toLowerCase()} remplacée).`,
       );
       return;
     }
@@ -1339,28 +1344,45 @@ function AppShell({
                         disabled={isReadOnly || !pasteBlock.trim()}
                         onClick={() => {
                           try {
-                            importFromPaste("append");
+                            importFromPaste("append", "admin");
+                            setPasteAccount("admin");
                           } catch (err) {
                             console.error(err);
-                            toast("Import impossible.");
+                            toast("Import admin impossible.");
                           }
                         }}
                       >
-                        Importer en {accountLabel(pasteAccount)}
+                        Importer en Administrateur
+                      </Btn>
+                      <Btn
+                        primary
+                        type="button"
+                        disabled={isReadOnly || !pasteBlock.trim()}
+                        onClick={() => {
+                          try {
+                            importFromPaste("append", "user");
+                            setPasteAccount("user");
+                          } catch (err) {
+                            console.error(err);
+                            toast("Import utilisateur impossible.");
+                          }
+                        }}
+                      >
+                        Importer en Utilisateur
                       </Btn>
                       <Btn
                         type="button"
                         disabled={isReadOnly || !pasteBlock.trim()}
                         onClick={() => {
                           try {
-                            importFromPaste("replace");
+                            importFromPaste("replace", pasteAccount);
                           } catch (err) {
                             console.error(err);
                             toast("Remplacement impossible.");
                           }
                         }}
                       >
-                        Remplacer toute la liste
+                        Remplacer la liste {accountLabel(pasteAccount)}
                       </Btn>
                     </div>
                     <p className="text-xs text-[var(--muted)]">
