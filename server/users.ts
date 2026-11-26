@@ -41,21 +41,81 @@ export async function needsInitialSetup(): Promise<boolean> {
   return (await countUsers()) === 0;
 }
 
-/** Crée le tout premier compte (admin). Refusé s'il existe déjà des utilisateurs. */
+/**
+ * Crée le tout premier compte (admin) de façon atomique (GET_LOCK).
+ * Refusé s’il existe déjà des utilisateurs.
+ */
 export async function setupInitialAdmin(input: {
   username: string;
   displayName: string;
   password: string;
 }): Promise<PublicUser> {
-  if (!(await needsInitialSetup())) {
-    throw new Error("L’installation est déjà initialisée.");
+  const pool = getPool();
+  const conn = await pool.getConnection();
+  try {
+    const [lockRows] = await conn.query<RowDataPacket[]>(
+      `SELECT GET_LOCK('aubm_pcheck_setup', 10) AS acquired`,
+    );
+    const acquired = Number((lockRows[0] as { acquired: number | null }).acquired);
+    if (acquired !== 1) {
+      throw new Error(
+        "Impossible de verrouiller l’installation. Réessayez dans un instant.",
+      );
+    }
+
+    try {
+      await conn.beginTransaction();
+
+      const [countRows] = await conn.query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM users`,
+      );
+      if (Number((countRows[0] as { c: number }).c) > 0) {
+        throw new Error("L’installation est déjà initialisée.");
+      }
+
+      const username = input.username.trim().toLowerCase();
+      const displayName = (input.displayName || input.username).trim();
+      const password = input.password;
+
+      if (!/^[a-z0-9._-]{3,64}$/.test(username)) {
+        throw new Error(
+          "Identifiant invalide (3–64 caractères : lettres, chiffres, . _ -).",
+        );
+      }
+      if (!displayName || displayName.length > 120) {
+        throw new Error("Nom affiché invalide.");
+      }
+      if (!password || password.length < 8) {
+        throw new Error("Mot de passe trop court (8 caractères minimum).");
+      }
+
+      const hash = await bcrypt.hash(password, 12);
+      const now = new Date().toISOString();
+      const id = randomUUID();
+
+      await conn.query(
+        `INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'admin', ?, ?)`,
+        [id, username, displayName, hash, now, now],
+      );
+
+      await conn.commit();
+
+      const [rows] = await conn.query<UserRow[]>(
+        `SELECT * FROM users WHERE id = ? LIMIT 1`,
+        [id],
+      );
+      if (!rows[0]) throw new Error("Utilisateur introuvable après création.");
+      return mapUser(rows[0]);
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      await conn.query(`SELECT RELEASE_LOCK('aubm_pcheck_setup')`);
+    }
+  } finally {
+    conn.release();
   }
-  return createUser({
-    username: input.username,
-    displayName: input.displayName || input.username,
-    password: input.password,
-    role: "admin",
-  });
 }
 
 export async function authenticate(
@@ -140,7 +200,7 @@ export async function updateUser(
     role?: AppRole;
     password?: string;
   },
-): Promise<PublicUser> {
+): Promise<{ user: PublicUser; passwordChanged: boolean }> {
   const existing = await getUserById(id);
   if (!existing) throw new Error("Utilisateur introuvable.");
 
@@ -148,6 +208,7 @@ export async function updateUser(
   const role = normalizeRole(patch.role ?? existing.role);
   const now = new Date().toISOString();
   const pool = getPool();
+  let passwordChanged = false;
 
   if (patch.password) {
     if (patch.password.length < 8) {
@@ -158,6 +219,7 @@ export async function updateUser(
       `UPDATE users SET display_name = ?, role = ?, password_hash = ?, updated_at = ? WHERE id = ?`,
       [displayName, role, hash, now, id],
     );
+    passwordChanged = true;
   } else {
     await pool.query(
       `UPDATE users SET display_name = ?, role = ?, updated_at = ? WHERE id = ?`,
@@ -179,7 +241,7 @@ export async function updateUser(
 
   const user = await getUserById(id);
   if (!user) throw new Error("Utilisateur introuvable.");
-  return user;
+  return { user, passwordChanged };
 }
 
 export async function deleteUser(id: string, actorId: string): Promise<void> {

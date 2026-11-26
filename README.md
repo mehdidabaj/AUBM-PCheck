@@ -11,7 +11,9 @@ Application de fiches de préparation PC, protégée par authentification.
 
 Si aucun utilisateur n’existe, la **première page** propose de **créer le compte administrateur** (identifiant + mot de passe). Aucun mot de passe admin dans `.env`.
 
-Réinitialiser les comptes (réaffiche l’écran de setup) :
+Si `SETUP_SECRET` est défini dans `.env` (généré par `install` / `reset-auth`), il faut le saisir dans le formulaire.
+
+Réinitialiser les comptes (réaffiche l’écran de setup + nouveau secret) :
 
 ```bash
 sudo bash /opt/aubm-pcheck/deploy/reset-auth.sh
@@ -30,6 +32,10 @@ sudo bash /opt/aubm-pcheck/deploy/reset-auth.sh
 - Pas de `ADMIN_PASSWORD` en clair dans `.env`
 - `.env` en `chmod 600` (secret MySQL de connexion uniquement)
 - Sessions + cookie httpOnly, rate-limit, Helmet/CSP, SQL paramétré
+- Erreurs MySQL/driver jamais renvoyées brutes au client
+- Setup initial atomique (`GET_LOCK`) + `SETUP_SECRET` optionnel
+- Fiches finalisées immuables côté API
+- Invalidation des sessions après changement de mot de passe
 - **Recommandé** : HTTPS (nginx) + `COOKIE_SECURE=true`
 
 ## Déploiement Debian

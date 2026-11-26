@@ -15,6 +15,16 @@ export function readSessionToken(req: Request): string | undefined {
   return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
+function isStaticOrSpaPath(path: string): boolean {
+  if (path.startsWith("/api")) return false;
+  return true;
+}
+
+/**
+ * Attache l’utilisateur de session.
+ * Sur les assets / SPA : une erreur MySQL n’empêche pas de servir le HTML/JS.
+ * Sur /api/* : l’erreur remonte (le handler API renverra un message générique).
+ */
 export async function attachUser(
   req: AuthedRequest,
   _res: Response,
@@ -24,6 +34,12 @@ export async function attachUser(
     req.user = (await getSessionUser(readSessionToken(req))) || undefined;
     next();
   } catch (err) {
+    if (isStaticOrSpaPath(req.path)) {
+      console.error("attachUser (static ignoré) :", err);
+      req.user = undefined;
+      next();
+      return;
+    }
     next(err);
   }
 }

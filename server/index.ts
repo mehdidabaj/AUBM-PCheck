@@ -13,6 +13,7 @@ import {
   type AuthedRequest,
 } from "./auth.js";
 import { getMysqlConfig, initDb, loadEnvFile } from "./db.js";
+import { publicErrorMessage } from "./errors.js";
 import { deleteFiche, getFiche, listFiches, upsertFiche } from "./fiches.js";
 import { findProjectRoot } from "./paths.js";
 import {
@@ -38,18 +39,60 @@ function paramId(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function sendError(
+  res: express.Response,
+  status: number,
+  err: unknown,
+  fallback: string,
+  logLabel: string,
+) {
+  console.error(logLabel, err);
+  res.status(status).json({ error: publicErrorMessage(err, fallback) });
+}
+
+function validateFicheBody(
+  body: FicheInput | undefined,
+): { ok: true; body: FicheInput } | { ok: false; error: string } {
+  if (
+    !body?.version?.trim() ||
+    !body?.owner?.trim() ||
+    !body?.pcName?.trim() ||
+    !body?.startDate ||
+    !body?.tasks?.length
+  ) {
+    return {
+      ok: false,
+      error:
+        "version, owner, pcName, startDate et au moins une tâche sont requis.",
+    };
+  }
+  if (body.status !== "draft" && body.status !== "finalized") {
+    return { ok: false, error: "status invalide." };
+  }
+  return { ok: true, body };
+}
+
+function checkSetupSecret(req: express.Request): string | null {
+  const expected = process.env.SETUP_SECRET?.trim();
+  if (!expected) return null;
+  const fromHeader = String(req.headers["x-setup-secret"] || "");
+  const fromBody = String(req.body?.setupSecret || "");
+  if (fromHeader !== expected && fromBody !== expected) {
+    return "Secret d’installation invalide ou manquant.";
+  }
+  return null;
+}
+
 const rootDir = findProjectRoot(import.meta.url);
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8091);
 const isProd = process.env.NODE_ENV === "production";
-const BUILD_ID = "setup-admin-2026-11-25f";
+const BUILD_ID = "audit-fixes-2026-11-26a";
 
 const app = express();
 app.set("trust proxy", 1);
 app.use(
   helmet({
-    // CSP assouplie : les builds Vite (module + crossorigin) cassent sinon
-    // l’UI (page blanche) si les en-têtes CORS/CSP sont trop stricts.
     contentSecurityPolicy: {
       useDefaults: false,
       directives: {
@@ -66,12 +109,10 @@ app.use(
     },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: "cross-origin" },
-    // Site servi en HTTP clair sur IP:port — HSTS casserait le chargement
     hsts: false,
   }),
 );
 
-// Nécessaire pour les <script type="module" crossorigin> générés par Vite
 app.use((req, res, next) => {
   if (req.path.startsWith("/assets/")) {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -122,23 +163,17 @@ function clearSessionCookie(res: express.Response) {
 app.get("/api/health", async (_req, res) => {
   try {
     await initDb();
-    const cfg = getMysqlConfig();
     res.json({
       ok: true,
       service: "aubm-pcheck",
       build: BUILD_ID,
-      host: HOST,
-      port: PORT,
-      db: "mysql",
-      auth: true,
-      mysqlHost: cfg.host,
-      mysqlDatabase: cfg.database,
     });
   } catch (err) {
+    console.error("GET /api/health", err);
     res.status(500).json({
       ok: false,
       build: BUILD_ID,
-      error: err instanceof Error ? err.message : "Erreur base de données",
+      error: "Service temporairement indisponible.",
     });
   }
 });
@@ -153,12 +188,13 @@ app.get("/api/auth/me", (req: AuthedRequest, res) => {
 
 app.get("/api/auth/setup", async (_req, res) => {
   try {
-    res.json({ needsSetup: await needsInitialSetup() });
-  } catch (err) {
-    console.error("GET /api/auth/setup", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
+    const needsSetup = await needsInitialSetup();
+    res.json({
+      needsSetup,
+      setupSecretRequired: Boolean(process.env.SETUP_SECRET?.trim()) && needsSetup,
     });
+  } catch (err) {
+    sendError(res, 500, err, "Service temporairement indisponible.", "GET /api/auth/setup");
   }
 });
 
@@ -168,6 +204,13 @@ app.post("/api/auth/setup", loginLimiter, async (req, res) => {
       res.status(409).json({ error: "L’installation est déjà initialisée." });
       return;
     }
+
+    const secretErr = checkSetupSecret(req);
+    if (secretErr) {
+      res.status(403).json({ error: secretErr });
+      return;
+    }
+
     const username = String(req.body?.username || "");
     const displayName = String(req.body?.displayName || username);
     const password = String(req.body?.password || "");
@@ -187,10 +230,17 @@ app.post("/api/auth/setup", loginLimiter, async (req, res) => {
     setSessionCookie(res, session.token, session.expiresAt);
     res.status(201).json({ user });
   } catch (err) {
-    console.error("POST /api/auth/setup", err);
-    res.status(400).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    const msg = publicErrorMessage(err, "Création impossible.");
+    const status =
+      msg.startsWith("L’installation") || msg.startsWith("L'installation")
+        ? 409
+        : msg.startsWith("Identifiant") ||
+            msg.startsWith("Nom affiché") ||
+            msg.startsWith("Mot de passe") ||
+            msg.startsWith("Les mots")
+          ? 400
+          : 500;
+    sendError(res, status, err, "Création impossible.", "POST /api/auth/setup");
   }
 });
 
@@ -211,10 +261,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
     setSessionCookie(res, session.token, session.expiresAt);
     res.json({ user });
   } catch (err) {
-    console.error("POST /api/auth/login", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 500, err, "Connexion impossible.", "POST /api/auth/login");
   }
 });
 
@@ -225,9 +272,8 @@ app.post("/api/auth/logout", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error("POST /api/auth/logout", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    clearSessionCookie(res);
+    res.json({ ok: true });
   }
 });
 
@@ -235,10 +281,7 @@ app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
   try {
     res.json(await listUsers());
   } catch (err) {
-    console.error("GET /api/users", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 500, err, "Erreur serveur.", "GET /api/users");
   }
 });
 
@@ -252,10 +295,7 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
     });
     res.status(201).json(user);
   } catch (err) {
-    console.error("POST /api/users", err);
-    res.status(400).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 400, err, "Création impossible.", "POST /api/users");
   }
 });
 
@@ -275,13 +315,16 @@ app.patch("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (typeof req.body?.password === "string" && req.body.password.length) {
       patch.password = req.body.password;
     }
-    const user = await updateUser(paramId(req.params.id), patch);
+    const { user, passwordChanged } = await updateUser(
+      paramId(req.params.id),
+      patch,
+    );
+    if (passwordChanged) {
+      await destroyUserSessions(user.id);
+    }
     res.json(user);
   } catch (err) {
-    console.error("PATCH /api/users/:id", err);
-    res.status(400).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 400, err, "Mise à jour impossible.", "PATCH /api/users/:id");
   }
 });
 
@@ -292,10 +335,7 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req: AuthedReques
     await destroyUserSessions(id);
     res.json({ ok: true });
   } catch (err) {
-    console.error("DELETE /api/users/:id", err);
-    res.status(400).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 400, err, "Suppression impossible.", "DELETE /api/users/:id");
   }
 });
 
@@ -308,43 +348,23 @@ app.get("/api/fiches", requireAuth, async (req, res) => {
     }
     res.json(await listFiches(status));
   } catch (err) {
-    console.error("GET /api/fiches", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 500, err, "Erreur serveur.", "GET /api/fiches");
   }
 });
 
 app.post("/api/fiches", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const body = req.body as FicheInput;
-
-    if (
-      !body?.version?.trim() ||
-      !body?.owner?.trim() ||
-      !body?.pcName?.trim() ||
-      !body?.startDate ||
-      !body?.tasks?.length
-    ) {
-      res.status(400).json({
-        error:
-          "version, owner, pcName, startDate et au moins une tâche sont requis.",
-      });
+    const validated = validateFicheBody(req.body as FicheInput);
+    if (!validated.ok) {
+      res.status(400).json({ error: validated.error });
       return;
     }
-
-    if (body.status !== "draft" && body.status !== "finalized") {
-      res.status(400).json({ error: "status invalide." });
-      return;
-    }
-
-    const fiche = await upsertFiche(body);
+    const fiche = await upsertFiche(validated.body);
     res.status(201).json(fiche);
   } catch (err) {
-    console.error("POST /api/fiches", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    const msg = publicErrorMessage(err, "Erreur serveur.");
+    const status = msg.startsWith("Cette fiche est finalisée") ? 409 : 500;
+    sendError(res, status, err, "Erreur serveur.", "POST /api/fiches");
   }
 });
 
@@ -357,23 +377,26 @@ app.get("/api/fiches/:id", requireAuth, async (req, res) => {
     }
     res.json(fiche);
   } catch (err) {
-    console.error("GET /api/fiches/:id", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 500, err, "Erreur serveur.", "GET /api/fiches/:id");
   }
 });
 
 app.put("/api/fiches/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const body = req.body as FicheInput;
-    const fiche = await upsertFiche({ ...body, id: paramId(req.params.id) });
+    const validated = validateFicheBody(req.body as FicheInput);
+    if (!validated.ok) {
+      res.status(400).json({ error: validated.error });
+      return;
+    }
+    const fiche = await upsertFiche({
+      ...validated.body,
+      id: paramId(req.params.id),
+    });
     res.json(fiche);
   } catch (err) {
-    console.error("PUT /api/fiches/:id", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    const msg = publicErrorMessage(err, "Erreur serveur.");
+    const status = msg.startsWith("Cette fiche est finalisée") ? 409 : 500;
+    sendError(res, status, err, "Erreur serveur.", "PUT /api/fiches/:id");
   }
 });
 
@@ -386,10 +409,7 @@ app.delete("/api/fiches/:id", requireAuth, requireAdmin, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (err) {
-    console.error("DELETE /api/fiches/:id", err);
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
-    });
+    sendError(res, 500, err, "Erreur serveur.", "DELETE /api/fiches/:id");
   }
 });
 
@@ -442,7 +462,7 @@ app.use(
   ) => {
     console.error("Erreur non gérée :", err);
     res.status(500).json({
-      error: err instanceof Error ? err.message : "Erreur serveur",
+      error: publicErrorMessage(err, "Erreur serveur"),
     });
   },
 );
@@ -457,8 +477,11 @@ async function main() {
       `MySQL prêt (${cfg.host}:${cfg.port}/${cfg.database} user=${cfg.user})`,
     );
     if (setup) {
+      const secretHint = process.env.SETUP_SECRET?.trim()
+        ? " (SETUP_SECRET requis)"
+        : "";
       console.log(
-        "Aucun utilisateur : ouvrez l’UI pour créer le premier administrateur.",
+        `Aucun utilisateur : ouvrez l’UI pour créer le premier administrateur${secretHint}.`,
       );
     }
   } catch (err) {

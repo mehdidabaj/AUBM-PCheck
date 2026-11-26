@@ -31,11 +31,18 @@ export function loadEnvFile() {
 
 export function getMysqlConfig(): PoolOptions {
   loadEnvFile();
+  const isProd = process.env.NODE_ENV === "production";
+  const password = process.env.MYSQL_PASSWORD;
+  if (isProd && (!password || password.length === 0)) {
+    throw new Error(
+      "MYSQL_PASSWORD est requis en production (définir dans .env).",
+    );
+  }
   return {
     host: process.env.MYSQL_HOST || "127.0.0.1",
     port: Number(process.env.MYSQL_PORT || 3306),
     user: process.env.MYSQL_USER || "aubm",
-    password: process.env.MYSQL_PASSWORD || "aubm_pcheck",
+    password: password || "aubm_pcheck_dev",
     database: process.env.MYSQL_DATABASE || "aubm_pcheck",
     waitForConnections: true,
     connectionLimit: 10,

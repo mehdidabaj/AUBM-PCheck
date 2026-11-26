@@ -72,6 +72,41 @@ async function loadTasks(ficheId: string): Promise<TaskItem[]> {
   return mapTasks(rows);
 }
 
+async function loadTasksForFiches(
+  ficheIds: string[],
+): Promise<Map<string, TaskItem[]>> {
+  const map = new Map<string, TaskItem[]>();
+  if (ficheIds.length === 0) return map;
+
+  const pool = getPool();
+  const placeholders = ficheIds.map(() => "?").join(",");
+  const [rows] = await pool.query<TaskRow[]>(
+    `SELECT * FROM tasks
+     WHERE fiche_id IN (${placeholders})
+     ORDER BY fiche_id,
+       CASE account WHEN 'admin' THEN 0 ELSE 1 END,
+       sort_order ASC`,
+    ficheIds,
+  );
+
+  for (const id of ficheIds) {
+    map.set(id, []);
+  }
+  for (const row of rows) {
+    const list = map.get(row.fiche_id);
+    if (list) {
+      list.push({
+        id: row.id,
+        text: row.text,
+        done: row.done === 1 || row.done === true,
+        sortOrder: row.sort_order,
+        account: normalizeAccount(row.account),
+      });
+    }
+  }
+  return map;
+}
+
 export async function listFiches(status?: FicheStatus): Promise<PcTodoFiche[]> {
   const pool = getPool();
   const [rows] = status
@@ -83,11 +118,8 @@ export async function listFiches(status?: FicheStatus): Promise<PcTodoFiche[]> {
         `SELECT * FROM fiches ORDER BY updated_at DESC`,
       );
 
-  const result: PcTodoFiche[] = [];
-  for (const row of rows) {
-    result.push(mapFiche(row, await loadTasks(row.id)));
-  }
-  return result;
+  const tasksByFiche = await loadTasksForFiches(rows.map((r) => r.id));
+  return rows.map((row) => mapFiche(row, tasksByFiche.get(row.id) || []));
 }
 
 export async function getFiche(id: string): Promise<PcTodoFiche | null> {
@@ -106,6 +138,12 @@ export async function upsertFiche(input: FicheInput): Promise<PcTodoFiche> {
   const now = new Date().toISOString();
   const id = input.id?.trim() || randomUUID();
   const existing = await getFiche(id);
+
+  if (existing?.status === "finalized") {
+    throw new Error(
+      "Cette fiche est finalisée et ne peut plus être modifiée.",
+    );
+  }
 
   const createdAt = existing?.createdAt ?? now;
   const finalizedAt =

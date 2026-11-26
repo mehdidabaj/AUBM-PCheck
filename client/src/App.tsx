@@ -45,7 +45,11 @@ function sortTasksByAccount(list: EditorTask[]): EditorTask[] {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function uid() {
@@ -69,18 +73,29 @@ async function parseJsonError(res: Response): Promise<string> {
 export default function App() {
   const [user, setUser] = useState<PublicUser | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [setupSecretRequired, setSetupSecretRequired] = useState(false);
+  const [bootError, setBootError] = useState("");
   const [authSettled, setAuthSettled] = useState(false);
 
   const bootAuth = useCallback(async () => {
+    setBootError("");
     try {
       const setupRes = await fetch("/api/auth/setup", fetchOpts);
       if (setupRes.ok) {
-        const setupData = (await setupRes.json()) as { needsSetup?: boolean };
+        const setupData = (await setupRes.json()) as {
+          needsSetup?: boolean;
+          setupSecretRequired?: boolean;
+        };
         setNeedsSetup(Boolean(setupData.needsSetup));
+        setSetupSecretRequired(Boolean(setupData.setupSecretRequired));
         if (setupData.needsSetup) {
           setUser(null);
           return;
         }
+      } else {
+        setBootError(await parseJsonError(setupRes));
+        setUser(null);
+        return;
       }
 
       const res = await fetch("/api/auth/me", fetchOpts);
@@ -91,6 +106,7 @@ export default function App() {
         setUser(null);
       }
     } catch {
+      setBootError("Impossible de joindre le serveur. Réessayez.");
       setUser(null);
     } finally {
       setAuthSettled(true);
@@ -106,6 +122,7 @@ export default function App() {
     displayName: string;
     password: string;
     passwordConfirm: string;
+    setupSecret?: string;
   }) {
     const res = await fetch("/api/auth/setup", {
       ...fetchOpts,
@@ -118,6 +135,7 @@ export default function App() {
     }
     const data = (await res.json()) as { user: PublicUser };
     setNeedsSetup(false);
+    setSetupSecretRequired(false);
     setUser(data.user);
   }
 
@@ -149,12 +167,38 @@ export default function App() {
     );
   }
 
+  if (bootError && !needsSetup && !user) {
+    return (
+      <AuthShell
+        title="Service indisponible"
+        subtitle="La connexion au serveur ou à la base de données a échoué."
+      >
+        <p className="text-sm font-semibold text-[var(--danger)]">{bootError}</p>
+        <button
+          type="button"
+          onClick={() => {
+            setAuthSettled(false);
+            void bootAuth();
+          }}
+          className="w-full rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)]"
+        >
+          Réessayer
+        </button>
+      </AuthShell>
+    );
+  }
+
   if (user) {
     return <AppShell user={user} onLogout={() => void handleLogout()} />;
   }
 
   if (needsSetup) {
-    return <SetupScreen onSetup={handleSetup} />;
+    return (
+      <SetupScreen
+        onSetup={handleSetup}
+        setupSecretRequired={setupSecretRequired}
+      />
+    );
   }
 
   return <LoginScreen onLogin={handleLogin} />;
@@ -202,18 +246,22 @@ function AuthShell({
 
 function SetupScreen({
   onSetup,
+  setupSecretRequired,
 }: {
   onSetup: (input: {
     username: string;
     displayName: string;
     password: string;
     passwordConfirm: string;
+    setupSecret?: string;
   }) => Promise<void>;
+  setupSecretRequired: boolean;
 }) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [setupSecret, setSetupSecret] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -228,6 +276,10 @@ function SetupScreen({
       setError("Mot de passe trop court (8 caractères minimum).");
       return;
     }
+    if (setupSecretRequired && !setupSecret.trim()) {
+      setError("Secret d’installation requis.");
+      return;
+    }
     setBusy(true);
     try {
       await onSetup({
@@ -235,6 +287,9 @@ function SetupScreen({
         displayName: displayName.trim() || username.trim(),
         password,
         passwordConfirm,
+        ...(setupSecretRequired
+          ? { setupSecret: setupSecret.trim() }
+          : {}),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Création impossible.");
@@ -300,6 +355,21 @@ function SetupScreen({
             required
           />
         </label>
+        {setupSecretRequired && (
+          <label className="block text-xs font-semibold text-[var(--muted)]">
+            Secret d’installation
+            <input
+              type="password"
+              autoComplete="off"
+              value={setupSecret}
+              disabled={busy}
+              onChange={(e) => setSetupSecret(e.target.value)}
+              className="field mt-2"
+              placeholder="Fourni par reset-auth / install"
+              required
+            />
+          </label>
+        )}
         {error && (
           <p className="text-sm font-semibold text-[var(--danger)]">{error}</p>
         )}
@@ -430,6 +500,10 @@ function AppShell({
     password: "",
     role: "reader",
   });
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editDisplayName, setEditDisplayName] = useState("");
+  const [editRole, setEditRole] = useState<AppRole>("reader");
+  const [editPassword, setEditPassword] = useState("");
 
   const isReadOnly =
     user.role === "reader" || editorMode === "finalized";
@@ -880,7 +954,14 @@ function AppShell({
         : "Retirer cette fiche de l’historique ?",
     );
     if (!ok) return;
-    await fetch(`/api/fiches/${id}`, { ...fetchOpts, method: "DELETE" });
+    const res = await fetch(`/api/fiches/${id}`, {
+      ...fetchOpts,
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      toast(await parseJsonError(res));
+      return;
+    }
     if (currentId === id) {
       if (isAppAdmin) resetEditor();
       else setView("drafts");
@@ -910,6 +991,56 @@ function AppShell({
     });
     await loadUsers();
     toast("Utilisateur créé.");
+  }
+
+  function startEditUser(u: PublicUser) {
+    setEditingUserId(u.id);
+    setEditDisplayName(u.displayName);
+    setEditRole(u.role);
+    setEditPassword("");
+  }
+
+  function cancelEditUser() {
+    setEditingUserId(null);
+    setEditDisplayName("");
+    setEditPassword("");
+  }
+
+  async function saveEditUser(e: FormEvent) {
+    e.preventDefault();
+    if (!isAppAdmin || !editingUserId) return;
+    const body: {
+      displayName: string;
+      role: AppRole;
+      password?: string;
+    } = {
+      displayName: editDisplayName.trim(),
+      role: editRole,
+    };
+    if (editPassword.trim()) {
+      if (editPassword.trim().length < 8) {
+        toast("Mot de passe trop court (8 caractères minimum).");
+        return;
+      }
+      body.password = editPassword.trim();
+    }
+    const res = await fetch(`/api/users/${editingUserId}`, {
+      ...fetchOpts,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      toast(await parseJsonError(res));
+      return;
+    }
+    cancelEditUser();
+    await loadUsers();
+    toast(
+      body.password
+        ? "Utilisateur mis à jour (sessions invalidées)."
+        : "Utilisateur mis à jour.",
+    );
   }
 
   async function deleteAppUser(id: string) {
@@ -1521,35 +1652,87 @@ function AppShell({
                 <Empty>Aucun utilisateur enregistré.</Empty>
               ) : (
                 users.map((u) => (
-                  <div
-                    key={u.id}
-                    className="panel flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <div className="text-lg font-semibold">
-                        {u.displayName}
+                  <div key={u.id} className="panel space-y-4 p-5">
+                    {editingUserId === u.id ? (
+                      <form
+                        onSubmit={(e) => void saveEditUser(e)}
+                        className="grid gap-3 md:grid-cols-2"
+                      >
+                        <div className="md:col-span-2 text-sm text-[var(--muted)]">
+                          Modifier <strong>{u.username}</strong>
+                        </div>
+                        <Field label="Nom affiché">
+                          <input
+                            required
+                            value={editDisplayName}
+                            onChange={(e) => setEditDisplayName(e.target.value)}
+                            className="field"
+                          />
+                        </Field>
+                        <Field label="Rôle">
+                          <select
+                            value={editRole}
+                            onChange={(e) =>
+                              setEditRole(e.target.value as AppRole)
+                            }
+                            className="field"
+                            disabled={u.id === user.id}
+                          >
+                            <option value="reader">Lecteur</option>
+                            <option value="admin">Administrateur</option>
+                          </select>
+                        </Field>
+                        <Field label="Nouveau mot de passe (optionnel)">
+                          <input
+                            type="password"
+                            value={editPassword}
+                            onChange={(e) => setEditPassword(e.target.value)}
+                            className="field"
+                            autoComplete="new-password"
+                            placeholder="Laisser vide pour ne pas changer"
+                          />
+                        </Field>
+                        <div className="flex items-end gap-2">
+                          <Btn primary type="submit">
+                            Enregistrer
+                          </Btn>
+                          <Btn ghost type="button" onClick={cancelEditUser}>
+                            Annuler
+                          </Btn>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <div className="text-lg font-semibold">
+                            {u.displayName}
+                          </div>
+                          <div className="mt-1 text-sm text-[var(--muted)]">
+                            {u.username} · {roleLabel(u.role)}
+                          </div>
+                          <div className="mt-1 text-xs text-[var(--muted)]">
+                            Créé le {formatDate(u.createdAt.slice(0, 10))}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Btn ghost onClick={() => startEditUser(u)}>
+                            Modifier
+                          </Btn>
+                          {u.id !== user.id ? (
+                            <Btn
+                              danger
+                              onClick={() => void deleteAppUser(u.id)}
+                            >
+                              Supprimer
+                            </Btn>
+                          ) : (
+                            <span className="self-center text-xs text-[var(--muted)]">
+                              Compte actuel
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-1 text-sm text-[var(--muted)]">
-                        {u.username} · {roleLabel(u.role)}
-                      </div>
-                      <div className="mt-1 text-xs text-[var(--muted)]">
-                        Créé le {formatDate(u.createdAt.slice(0, 10))}
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      {u.id !== user.id ? (
-                        <Btn
-                          danger
-                          onClick={() => void deleteAppUser(u.id)}
-                        >
-                          Supprimer
-                        </Btn>
-                      ) : (
-                        <span className="text-xs text-[var(--muted)]">
-                          Compte actuel
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
                 ))
               )}
