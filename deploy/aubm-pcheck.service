@@ -1,0 +1,21 @@
+[Unit]
+Description=AUBM PCheck (Express + MySQL)
+After=network.target mysql.service mariadb.service
+Wants=mysql.service mariadb.service
+
+[Service]
+Type=simple
+User=aubm
+Group=aubm
+WorkingDirectory=/opt/aubm-pcheck
+EnvironmentFile=-/opt/aubm-pcheck/.env
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=8091
+ExecStart=/usr/bin/node /opt/aubm-pcheck/dist/server/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
